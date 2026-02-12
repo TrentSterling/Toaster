@@ -1,0 +1,123 @@
+#pragma kernel VoxelizeMesh
+#pragma kernel ClearGrid
+
+// --- Inputs ---
+StructuredBuffer<float3> Vertices;
+StructuredBuffer<float3> Normals;
+StructuredBuffer<float2> UVs;
+StructuredBuffer<int> Indices;
+
+// The "Meta" texture we just baked for this submesh
+Texture2D<float4> MetaTexture;
+SamplerState samplerMetaTexture;
+
+// The global voxel grid we are writing to
+RWTexture3D<float4> VoxelGrid;
+
+// Setup
+float4x4 LocalToWorld;
+float3 WorldBoundsMin;
+float VoxelSize;
+int3 GridResolution;
+int IndexOffset;
+int TriangleCount;
+
+// --- Math Helpers ---
+
+// Simple AABB-Triangle overlap test (bounding box + plane check)
+// For small voxels this is accurate enough without full SAT
+bool AABBIntersectsTriangle(float3 boxMin, float3 boxMax, float3 v0, float3 v1, float3 v2)
+{
+    // Box vs Triangle AABB test
+    float3 triMin = min(v0, min(v1, v2));
+    float3 triMax = max(v0, max(v1, v2));
+    if (any(triMin > boxMax) || any(triMax < boxMin))
+        return false;
+
+    return true;
+}
+
+// Barycentric coordinates to interpolate UVs
+float3 CalculateBarycentric(float3 p, float3 a, float3 b, float3 c)
+{
+    float3 v0 = b - a, v1 = c - a, v2 = p - a;
+    float d00 = dot(v0, v0);
+    float d01 = dot(v0, v1);
+    float d11 = dot(v1, v1);
+    float d20 = dot(v2, v0);
+    float d21 = dot(v2, v1);
+    float denom = d00 * d11 - d01 * d01;
+
+    if (abs(denom) < 1e-5)
+        return float3(1, 0, 0); // Degenerate triangle
+
+    float v = (d11 * d20 - d01 * d21) / denom;
+    float w = (d00 * d21 - d01 * d20) / denom;
+    float u = 1.0f - v - w;
+    return float3(u, v, w);
+}
+
+[numthreads(64, 1, 1)]
+void VoxelizeMesh(uint3 id : SV_DispatchThreadID)
+{
+    if ((int) id.x >= TriangleCount)
+        return;
+
+    // 1. Get Triangle Data
+    int idx = IndexOffset + (id.x * 3);
+    int i0 = Indices[idx];
+    int i1 = Indices[idx + 1];
+    int i2 = Indices[idx + 2];
+
+    float3 v0 = mul(LocalToWorld, float4(Vertices[i0], 1)).xyz;
+    float3 v1 = mul(LocalToWorld, float4(Vertices[i1], 1)).xyz;
+    float3 v2 = mul(LocalToWorld, float4(Vertices[i2], 1)).xyz;
+
+    float2 uv0 = UVs[i0];
+    float2 uv1 = UVs[i1];
+    float2 uv2 = UVs[i2];
+
+    // 2. Calculate Triangle Bounds in Voxel Grid Space
+    float3 triMin = min(v0, min(v1, v2));
+    float3 triMax = max(v0, max(v1, v2));
+
+    int3 gridMin = max(0, (int3) ((triMin - WorldBoundsMin) / VoxelSize));
+    int3 gridMax = min(GridResolution - 1, (int3) ((triMax - WorldBoundsMin) / VoxelSize));
+
+    // 3. Iterate over potential Voxels
+    for (int z = gridMin.z; z <= gridMax.z; z++)
+    {
+        for (int y = gridMin.y; y <= gridMax.y; y++)
+        {
+            for (int x = gridMin.x; x <= gridMax.x; x++)
+            {
+                float3 voxelCenter = WorldBoundsMin + (float3(x, y, z) * VoxelSize) + (VoxelSize * 0.5);
+                float3 voxelMin = voxelCenter - (VoxelSize * 0.5);
+                float3 voxelMax = voxelCenter + (VoxelSize * 0.5);
+
+                if (AABBIntersectsTriangle(voxelMin, voxelMax, v0, v1, v2))
+                {
+                    // 4. Hit! Get Color from Meta Texture
+                    // Project voxel center onto triangle for barycentric UV
+                    float3 bary = CalculateBarycentric(voxelCenter, v0, v1, v2);
+                    float2 interpolatedUV = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
+
+                    // Sample the texture we baked via Meta Pass
+                    float4 albedo = MetaTexture.SampleLevel(samplerMetaTexture, interpolatedUV, 0);
+
+                    // 5. Write to Grid
+                    // Race condition if multiple triangles hit same voxel — last write wins
+                    VoxelGrid[int3(x, y, z)] = albedo;
+                }
+            }
+        }
+    }
+}
+
+[numthreads(8, 8, 8)]
+void ClearGrid(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= (uint3) GridResolution))
+        return;
+    VoxelGrid[id] = float4(0, 0, 0, 0);
+}
