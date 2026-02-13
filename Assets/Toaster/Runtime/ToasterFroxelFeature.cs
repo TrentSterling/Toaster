@@ -42,8 +42,12 @@ namespace Toaster
             [Range(0f, 10f)]
             public float fogIntensity = 1f;
 
-            [Tooltip("Base haze color added in unlit areas. Prevents pure-black fog in shadowed regions.")]
-            public Color ambientColor = new Color(0.02f, 0.02f, 0.04f, 1f);
+            [Tooltip("Scattering albedo — multiplies scattering brightness without changing opacity. >1 = brighter fog, <1 = dimmer. Physically 1.0, but higher values make thin fog visible.")]
+            [Range(0f, 10f)]
+            public float scatteringAlbedo = 3f;
+
+            [Tooltip("Base haze color added everywhere in fog. Higher = more visible fog in unlit areas. RGB (0.1-0.2) gives a subtle atmospheric haze.")]
+            public Color ambientColor = new Color(0.12f, 0.12f, 0.18f, 1f);
 
             [Header("Lighting")]
             [Tooltip("Maximum number of scene lights to evaluate per froxel.")]

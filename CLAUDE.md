@@ -101,11 +101,14 @@ Screen-space frustum-aligned 3D grid with physically-based Beer-Lambert integrat
 3. **IntegrateFroxels** — Front-to-back per-column (x,y): walk Z slices, accumulate Beer-Lambert transmittance and energy-conserving in-scattering `(1-exp(-σd))/σ`.
 4. **Apply** — Fullscreen triangle composite (Blend One SrcAlpha, depth-aware). Supports 5 debug modes.
 
-### Density Model (v1.1)
+### Density Model (v1.2)
 - `fogDensity` slider (0–0.2) = direct extinction coefficient (absorption per meter)
 - Sent raw to GPU — no conversion. Per-volume `densityMultiplier` scales it.
-- At fogDensity=0.03, densityMultiplier=3: effective extinction=0.09 → `exp(-0.09*24)=0.12` → 88% opacity through 24m corridor
-- At fogDensity=0.03, densityMultiplier=2: effective extinction=0.06 → `exp(-0.06*16)=0.38` → 62% opacity through 16m courtyard
+- `scatteringAlbedo` (0–10, default 3) = brightness multiplier decoupled from opacity
+  - Multiplies in-scattering without changing extinction/transmittance
+  - Physically 1.0, but >1 makes thin fog visible (compensates for dim baked data)
+- `ambientColor` default bumped to (0.12, 0.12, 0.18) — visible blue haze in unlit areas
+- At fogDensity=0.03, densityMultiplier=3: effective extinction=0.09 → 88% opacity through 24m
 - Default 0.03 is the known-working baseline; per-volume multipliers handle variation
 
 ### Light-Localized Density (v1.1)

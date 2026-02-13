@@ -82,6 +82,7 @@ namespace Toaster
         static readonly int s_FroxelScatterTex = Shader.PropertyToID("_FroxelScatterTex");
         static readonly int s_FroxelDebugMode = Shader.PropertyToID("_FroxelDebugMode");
         static readonly int s_LightDensityBoost = Shader.PropertyToID("_LightDensityBoost");
+        static readonly int s_ScatteringAlbedo = Shader.PropertyToID("_ScatteringAlbedo");
         static readonly int s_EnableHeightFog = Shader.PropertyToID("_EnableHeightFog");
         static readonly int s_HeightFogBase = Shader.PropertyToID("_HeightFogBase");
         static readonly int s_HeightFogTop = Shader.PropertyToID("_HeightFogTop");
@@ -323,6 +324,7 @@ namespace Toaster
             cmd.SetComputeVectorParam(cs, s_CamForward, camForward);
             cmd.SetComputeFloatParam(cs, s_ScatterAnisotropy, m_Settings.scatterAnisotropy);
             cmd.SetComputeFloatParam(cs, s_LightDensityBoost, m_Settings.lightDensityBoost);
+            cmd.SetComputeFloatParam(cs, s_ScatteringAlbedo, m_Settings.scatteringAlbedo);
             cmd.SetComputeIntParam(cs, s_EnableHeightFog, m_Settings.enableHeightFog ? 1 : 0);
             cmd.SetComputeFloatParam(cs, s_HeightFogBase, m_Settings.heightFogBase);
             cmd.SetComputeFloatParam(cs, s_HeightFogTop, m_Settings.heightFogTop);
@@ -659,6 +661,7 @@ namespace Toaster
             cmd.SetComputeVectorParam(cs, s_CamForward, data.camForward);
             cmd.SetComputeFloatParam(cs, s_ScatterAnisotropy, data.settings.scatterAnisotropy);
             cmd.SetComputeFloatParam(cs, s_LightDensityBoost, data.settings.lightDensityBoost);
+            cmd.SetComputeFloatParam(cs, s_ScatteringAlbedo, data.settings.scatteringAlbedo);
             cmd.SetComputeIntParam(cs, s_EnableHeightFog, data.settings.enableHeightFog ? 1 : 0);
             cmd.SetComputeFloatParam(cs, s_HeightFogBase, data.settings.heightFogBase);
             cmd.SetComputeFloatParam(cs, s_HeightFogTop, data.settings.heightFogTop);

@@ -48,6 +48,7 @@ SamplerState sampler_linear_clamp;
 // Global fog params
 float _FogDensity;
 float _FogIntensity;
+float _ScatteringAlbedo;
 float4 _AmbientFogColor;
 float _LightDensityBoost;
 int _EnableHeightFog;
@@ -276,8 +277,9 @@ void InjectMedia(uint3 id : SV_DispatchThreadID)
         float3 bakedColor = (voxelData.rgb + _AmbientFogColor.rgb)
                           * vol.settings.y * _FogIntensity;
 
-        // Baked lighting + scene lights contribute to this volume's density
-        scattering += (bakedColor + directLight) * baseDensity;
+        // In-scattering = color * density * albedo
+        // Albedo decouples brightness from opacity — >1 makes thin fog visible
+        scattering += (bakedColor + directLight) * baseDensity * _ScatteringAlbedo;
         extinction += baseDensity;
     }
 
@@ -286,7 +288,7 @@ void InjectMedia(uint3 id : SV_DispatchThreadID)
     {
         float boostExtinction = lightBoost * _LightDensityBoost * _FogDensity;
         extinction += boostExtinction;
-        scattering += directLight * boostExtinction;
+        scattering += directLight * boostExtinction * _ScatteringAlbedo;
     }
 
     float4 result = float4(scattering, extinction);

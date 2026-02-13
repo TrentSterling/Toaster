@@ -266,8 +266,11 @@ namespace Toaster
                 s.fogIntensity = EditorGUILayout.Slider(
                     new GUIContent("Intensity", "Brightness multiplier for baked light color in fog. Higher = more colorful fog."),
                     s.fogIntensity, 0f, 10f);
+                s.scatteringAlbedo = EditorGUILayout.Slider(
+                    new GUIContent("Scattering Albedo", "Multiplies fog brightness without changing opacity. >1 = brighter fog at same density. Physically 1.0, but 2-5 makes thin fog visible."),
+                    s.scatteringAlbedo, 0f, 10f);
                 s.ambientColor = EditorGUILayout.ColorField(
-                    new GUIContent("Ambient Color", "Base haze color in unlit areas. Added to baked lighting before intensity scaling."),
+                    new GUIContent("Ambient Color", "Base haze color everywhere in fog. Higher = more visible fog in unlit/shadowed areas. Try (0.1, 0.1, 0.15) for blue atmospheric haze."),
                     s.ambientColor);
                 s.maxDistance = EditorGUILayout.Slider(
                     new GUIContent("Max Distance", "How far the froxel grid extends from the camera (meters). Larger = covers more scene but less depth precision."),
