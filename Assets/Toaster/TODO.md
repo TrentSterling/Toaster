@@ -1,7 +1,7 @@
 # Toaster TODO
 
-## Current Status: v0.8 (Crumb)
-Working: Full pipeline — Material bake (Meta Pass) + GPU voxelization + path tracer + volume raymarcher + 6 debug visualizers + editor window + Shader Graph integration + froxel volumetric fog pipeline.
+## Current Status: v0.9 (Crumb)
+Working: Full pipeline — Material bake (Meta Pass + emission) + GPU voxelization + path tracer + volume raymarcher + 6 debug visualizers + editor window + Shader Graph integration + froxel volumetric fog with direct scene lighting.
 
 ---
 
@@ -39,24 +39,24 @@ Working: Full pipeline — Material bake (Meta Pass) + GPU voxelization + path t
 - [x] Temporal reprojection on froxel scattering — EMA blend with history buffer, previous ViewProj reprojection
 - [x] Static volume registry — ToasterVolume.ActiveVolumes for froxel pipeline auto-discovery
 - [x] Demo scene upgrade — corridor with pillars, arches, neon strips, dramatic colored lighting
+- [x] Direct scene light evaluation in froxel compute — point, spot, directional with distance/cone attenuation
+- [x] Henyey-Greenstein phase function — anisotropic scattering for god rays (g parameter -1..1)
+- [x] HDR Meta Pass — ARGBHalf render target captures emission + albedo in one pass
+- [x] Emissive material bleeding — unity_MetaFragmentControl (1,1,0,0) captures both albedo and emission
 
 ---
 
-## v0.9 Sprint — Wire + Test Froxel Pipeline
+## v1.0 Sprint — Polish + Quality
 
 ### Critical (must work before calling it done)
-- [ ] Wire froxel feature into URP renderer — add ToasterFroxelFeature to PC_Renderer.asset programmatically or document manual setup
-- [ ] Blue noise texture — generate or embed 128x128 R8 blue noise PNG for jitter
-- [ ] Test froxel fog in Play mode — verify fog renders depth-correctly with baked volumes
-- [ ] Fix any RenderGraph API issues — URP 17 API may need adjustments (AddUnsafePass, RTHandle lifecycle)
 - [ ] Temporal keyword toggle — enable/disable TEMPORAL_REPROJECTION multi_compile at runtime
 
 ### Froxel Quality
-- [ ] Phase function — Henyey-Greenstein or Mie scattering instead of isotropic
 - [ ] Height fog falloff — remap world Y between base/max height with sqrt density curve
-- [ ] Anisotropic scattering — directional response to main light for god rays
 - [ ] Froxel debug visualizer — 3D texture slice viewer for FroxelScattering/Integrated
 - [ ] Exposure/tonemapping on fog — HDR fog values can blow out, need soft clamp
+- [ ] Shadow rays for scene lights in fog — occlude light contribution behind solid geometry
+- [ ] Light cookie support — project light cookies into froxel injection
 
 ### Bake Quality
 - [ ] Barycentric UV interpolation improvement — project voxel center onto triangle plane for exact UV
@@ -81,7 +81,6 @@ Working: Full pipeline — Material bake (Meta Pass) + GPU voxelization + path t
 - [ ] Density field support — separate density channel or derive from voxel occupancy
 - [ ] Material property override for per-object voxel color tint
 - [ ] Wind-driven noise — animated 3D noise offset for fog movement
-- [ ] Light cookie support — project light cookies into froxel injection
 - [ ] Particle fog injection — let particle systems contribute density to froxels
 
 ### Demo Scene

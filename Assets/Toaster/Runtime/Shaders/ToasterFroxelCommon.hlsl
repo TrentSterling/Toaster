@@ -21,10 +21,11 @@ float _DepthUniformity; // 0 = logarithmic, 1 = linear, 0.5 = blend
 float4x4 _InvViewProj;
 float4x4 _PrevViewProj;
 float4 _ScreenParams_Froxel; // (width, height, 1/width, 1/height)
+float3 _CameraPos;
 int _FrameIndex;
 
 // Blue noise
-Texture2D<float> _BlueNoise;
+Texture2D _BlueNoise;
 SamplerState sampler_BlueNoise;
 
 // ============================================================
@@ -35,9 +36,9 @@ SamplerState sampler_BlueNoise;
 float SliceToDepth(float slice)
 {
     float t = slice / (float)_FroxelResZ;
-    float linear = _FroxelNear + t * (_FroxelFar - _FroxelNear);
-    float log_depth = _FroxelNear * pow(_FroxelFar / _FroxelNear, t);
-    return lerp(log_depth, linear, _DepthUniformity);
+    float linDepth = _FroxelNear + t * (_FroxelFar - _FroxelNear);
+    float logDepth = _FroxelNear * pow(abs(_FroxelFar / _FroxelNear), t);
+    return lerp(logDepth, linDepth, _DepthUniformity);
 }
 
 // Linear eye depth → fractional slice [0..numSlices]
@@ -95,7 +96,7 @@ float3 FroxelToWorld(int3 coord, float jitter)
 float GetBlueNoiseJitter(int2 screenPos, int frame)
 {
     // Animated blue noise: offset UV by golden ratio per frame
-    float2 uv = ((float2)(screenPos % 128) + 0.5) / 128.0;
+    float2 uv = ((float2)((uint2)screenPos % 128u) + 0.5) / 128.0;
     uv += float2(0.7548776662, 0.5698402909) * (float)frame; // golden ratio offsets
     uv = frac(uv);
     return _BlueNoise.SampleLevel(sampler_BlueNoise, uv, 0).r;

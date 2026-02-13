@@ -16,8 +16,18 @@ namespace Toaster
             public Vector4 settings;   // x = density, y = intensity, z = gridIndex, w = edgeFalloff
         }
 
+        // GPU data struct — must match ToasterFroxel.compute LightGPUData
+        struct LightGPUData
+        {
+            public Vector4 positionAndRange;    // xyz = position, w = range
+            public Vector4 colorAndIntensity;   // rgb = color, w = intensity
+            public Vector4 directionAndAngle;   // xyz = forward dir, w = cos(spotAngle * 0.5)
+            public Vector4 typeAndFlags;        // x = type (0=point, 1=spot, 2=directional), y = cos(innerAngle)
+        }
+
         const int MAX_VOLUME_GRIDS = 8;
         const int VOLUME_GPU_STRIDE = 48; // 3 x float4 = 48 bytes
+        const int LIGHT_GPU_STRIDE = 64;  // 4 x float4 = 64 bytes
 
         // Cached references (set per-frame via Setup)
         ToasterFroxelFeature.Settings m_Settings;
@@ -40,14 +50,40 @@ namespace Toaster
         List<VolumeGPUData> m_VolumeDataList = new List<VolumeGPUData>(8);
         List<Texture> m_VolumeGrids = new List<Texture>(8);
 
+        // Light data buffer
+        GraphicsBuffer m_LightDataBuffer;
+        List<LightGPUData> m_LightDataList = new List<LightGPUData>(16);
+
         // Temporal state
         int m_FrameIndex;
         Matrix4x4 m_PrevViewProj = Matrix4x4.identity;
         Vector3Int m_CurrentResolution;
 
-        // Keyword for temporal
-        LocalKeyword m_TemporalKeyword;
-        bool m_TemporalKeywordInitialized;
+        // Shader property IDs (cached)
+        static readonly int s_FroxelResX = Shader.PropertyToID("_FroxelResX");
+        static readonly int s_FroxelResY = Shader.PropertyToID("_FroxelResY");
+        static readonly int s_FroxelResZ = Shader.PropertyToID("_FroxelResZ");
+        static readonly int s_FroxelNear = Shader.PropertyToID("_FroxelNear");
+        static readonly int s_FroxelFar = Shader.PropertyToID("_FroxelFar");
+        static readonly int s_DepthUniformity = Shader.PropertyToID("_DepthUniformity");
+        static readonly int s_InvViewProj = Shader.PropertyToID("_InvViewProj");
+        static readonly int s_PrevViewProj = Shader.PropertyToID("_PrevViewProj");
+        static readonly int s_FrameIndex = Shader.PropertyToID("_FrameIndex");
+        static readonly int s_FogDensity = Shader.PropertyToID("_FogDensity");
+        static readonly int s_FogIntensity = Shader.PropertyToID("_FogIntensity");
+        static readonly int s_AmbientFogColor = Shader.PropertyToID("_AmbientFogColor");
+        static readonly int s_TemporalBlendAlpha = Shader.PropertyToID("_TemporalBlendAlpha");
+        static readonly int s_VolumeCount = Shader.PropertyToID("_VolumeCount");
+        static readonly int s_LightCount = Shader.PropertyToID("_LightCount");
+        static readonly int s_ScatterAnisotropy = Shader.PropertyToID("_ScatterAnisotropy");
+        static readonly int s_CameraPos = Shader.PropertyToID("_CameraPos");
+        static readonly int s_FroxelTex = Shader.PropertyToID("_FroxelTex");
+
+        static readonly string[] s_VolumeGridNames = new string[]
+        {
+            "VolumeGrid0", "VolumeGrid1", "VolumeGrid2", "VolumeGrid3",
+            "VolumeGrid4", "VolumeGrid5", "VolumeGrid6", "VolumeGrid7"
+        };
 
         public void Setup(ToasterFroxelFeature.Settings settings, ComputeShader compute, Material applyMaterial, Texture2D blueNoise)
         {
@@ -70,8 +106,6 @@ namespace Toaster
                 return;
 
             m_CurrentResolution = resolution;
-
-            // Release old targets
             ReleaseRenderTargets();
 
             var desc = new RenderTextureDescriptor(resolution.x, resolution.y, RenderTextureFormat.ARGBHalf, 0);
@@ -95,6 +129,8 @@ namespace Toaster
             m_HistoryBuffer = null;
         }
 
+        static bool s_LoggedDiagnostic;
+
         void CollectVolumeData()
         {
             m_VolumeDataList.Clear();
@@ -104,19 +140,25 @@ namespace Toaster
                 return;
 
             int gridIndex = 0;
+            int skippedNoBaker = 0, skippedNoGrid = 0;
             foreach (var volume in ToasterVolume.ActiveVolumes)
             {
                 if (gridIndex >= MAX_VOLUME_GRIDS)
                     break;
 
                 if (volume == null || volume.baker == null)
+                {
+                    skippedNoBaker++;
                     continue;
+                }
 
                 var grid = volume.LightingGrid;
                 if (grid == null)
+                {
+                    skippedNoGrid++;
                     continue;
+                }
 
-                // Compute world bounds from baker
                 Vector3 center = volume.baker.transform.position;
                 Vector3 size = volume.baker.boundsSize;
                 Vector3 worldMin = center - size * 0.5f;
@@ -138,6 +180,87 @@ namespace Toaster
                 m_VolumeGrids.Add(grid);
                 gridIndex++;
             }
+
+            // One-time diagnostic
+            if (!s_LoggedDiagnostic)
+            {
+                s_LoggedDiagnostic = true;
+                int total = ToasterVolume.ActiveVolumes.Count;
+                if (m_VolumeDataList.Count == 0)
+                    Appliance.LogWarning($"Froxel: {total} volume(s) found but 0 have valid grids. " +
+                        $"({skippedNoBaker} missing baker, {skippedNoGrid} missing grid texture). " +
+                        "Bake voxels first, or check serializedGrid on baker.");
+                else
+                    Appliance.Log($"Froxel: injecting {m_VolumeDataList.Count} volume(s) into froxel grid.");
+            }
+        }
+
+        void CollectLightData(int maxLights)
+        {
+            m_LightDataList.Clear();
+
+            var lights = Object.FindObjectsByType<Light>(FindObjectsSortMode.None);
+            foreach (var light in lights)
+            {
+                if (m_LightDataList.Count >= maxLights)
+                    break;
+
+                if (!light.isActiveAndEnabled || light.intensity <= 0f)
+                    continue;
+
+                // Skip area lights (not supported in real-time fog)
+                if (light.type == LightType.Rectangle || light.type == LightType.Disc)
+                    continue;
+
+                var data = new LightGPUData();
+                Color linearColor = light.color.linear;
+
+                data.colorAndIntensity = new Vector4(linearColor.r, linearColor.g, linearColor.b, light.intensity);
+
+                switch (light.type)
+                {
+                    case LightType.Point:
+                        data.positionAndRange = new Vector4(
+                            light.transform.position.x, light.transform.position.y,
+                            light.transform.position.z, light.range);
+                        data.directionAndAngle = Vector4.zero;
+                        data.typeAndFlags = new Vector4(0, 0, 0, 0);
+                        break;
+
+                    case LightType.Spot:
+                        data.positionAndRange = new Vector4(
+                            light.transform.position.x, light.transform.position.y,
+                            light.transform.position.z, light.range);
+                        Vector3 fwd = light.transform.forward;
+                        float cosOuter = Mathf.Cos(light.spotAngle * 0.5f * Mathf.Deg2Rad);
+                        float cosInner = Mathf.Cos(light.innerSpotAngle * 0.5f * Mathf.Deg2Rad);
+                        data.directionAndAngle = new Vector4(fwd.x, fwd.y, fwd.z, cosOuter);
+                        data.typeAndFlags = new Vector4(1, cosInner, 0, 0);
+                        break;
+
+                    case LightType.Directional:
+                        data.positionAndRange = Vector4.zero;
+                        Vector3 dir = light.transform.forward;
+                        data.directionAndAngle = new Vector4(dir.x, dir.y, dir.z, -1);
+                        data.typeAndFlags = new Vector4(2, 0, 0, 0);
+                        break;
+
+                    default:
+                        continue;
+                }
+
+                m_LightDataList.Add(data);
+            }
+        }
+
+        void EnsureLightBuffer(int count)
+        {
+            int needed = Mathf.Max(1, count);
+            if (m_LightDataBuffer != null && m_LightDataBuffer.count >= needed)
+                return;
+
+            m_LightDataBuffer?.Release();
+            m_LightDataBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, needed, LIGHT_GPU_STRIDE);
         }
 
         void EnsureVolumeBuffer(int count)
@@ -151,117 +274,156 @@ namespace Toaster
         }
 
         // ============================================================
-        // RenderGraph
+        // Shared compute dispatch logic (used by both paths)
         // ============================================================
 
-        public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
+        void DispatchCompute(CommandBuffer cmd, RenderTexture scatteringRT, RenderTexture integratedRT,
+            RenderTexture historyRT, Matrix4x4 invViewProj, Vector3 cameraPos)
         {
-            var cameraData = frameData.Get<UniversalCameraData>();
-            var resourceData = frameData.Get<UniversalResourceData>();
+            var cs = m_Compute;
+            var res = m_Settings.froxelResolution;
 
+            // Shared uniforms
+            cmd.SetComputeIntParam(cs, s_FroxelResX, res.x);
+            cmd.SetComputeIntParam(cs, s_FroxelResY, res.y);
+            cmd.SetComputeIntParam(cs, s_FroxelResZ, res.z);
+            cmd.SetComputeFloatParam(cs, s_FroxelNear, m_Settings.nearPlane);
+            cmd.SetComputeFloatParam(cs, s_FroxelFar, m_Settings.maxDistance);
+            cmd.SetComputeFloatParam(cs, s_DepthUniformity, m_Settings.depthUniformity);
+            cmd.SetComputeMatrixParam(cs, s_InvViewProj, invViewProj);
+            cmd.SetComputeMatrixParam(cs, s_PrevViewProj, m_PrevViewProj);
+            cmd.SetComputeIntParam(cs, s_FrameIndex, m_FrameIndex);
+            cmd.SetComputeFloatParam(cs, s_FogDensity, m_Settings.fogDensity);
+            cmd.SetComputeFloatParam(cs, s_FogIntensity, m_Settings.fogIntensity);
+            cmd.SetComputeVectorParam(cs, s_AmbientFogColor, m_Settings.ambientColor);
+            cmd.SetComputeVectorParam(cs, s_CameraPos, cameraPos);
+            cmd.SetComputeFloatParam(cs, s_ScatterAnisotropy, m_Settings.scatterAnisotropy);
+
+            if (m_BlueNoise != null)
+                cmd.SetComputeTextureParam(cs, m_InjectKernel, "_BlueNoise", m_BlueNoise);
+
+            // 1. Clear
+            cmd.SetComputeTextureParam(cs, m_ClearKernel, "FroxelScattering", scatteringRT);
+            cmd.DispatchCompute(cs, m_ClearKernel,
+                Mathf.CeilToInt(res.x / 4f),
+                Mathf.CeilToInt(res.y / 4f),
+                Mathf.CeilToInt(res.z / 4f));
+
+            // 2. Inject
+            cmd.SetComputeTextureParam(cs, m_InjectKernel, "FroxelScattering", scatteringRT);
+
+            if (m_Settings.enableTemporal && historyRT != null)
+            {
+                cmd.SetComputeTextureParam(cs, m_InjectKernel, "FroxelHistory", historyRT);
+                cmd.SetComputeFloatParam(cs, s_TemporalBlendAlpha, m_Settings.temporalBlendAlpha);
+            }
+
+            cmd.SetComputeBufferParam(cs, m_InjectKernel, "_VolumeDataBuffer", m_VolumeDataBuffer);
+            cmd.SetComputeIntParam(cs, s_VolumeCount, m_VolumeDataList.Count);
+
+            // Bind light data
+            cmd.SetComputeBufferParam(cs, m_InjectKernel, "_LightDataBuffer", m_LightDataBuffer);
+            cmd.SetComputeIntParam(cs, s_LightCount, m_LightDataList.Count);
+
+            // Bind all 8 grid slots — unused slots get first grid to silence DX11
+            Texture fallbackGrid = m_VolumeGrids.Count > 0 ? m_VolumeGrids[0] : scatteringRT;
+            for (int i = 0; i < MAX_VOLUME_GRIDS; i++)
+            {
+                var tex = i < m_VolumeGrids.Count ? m_VolumeGrids[i] : fallbackGrid;
+                cmd.SetComputeTextureParam(cs, m_InjectKernel, s_VolumeGridNames[i], tex);
+            }
+
+            cmd.DispatchCompute(cs, m_InjectKernel,
+                Mathf.CeilToInt(res.x / 4f),
+                Mathf.CeilToInt(res.y / 4f),
+                Mathf.CeilToInt(res.z / 4f));
+
+            // 3. Integrate
+            cmd.SetComputeTextureParam(cs, m_IntegrateKernel, "FroxelScattering", scatteringRT);
+            cmd.SetComputeTextureParam(cs, m_IntegrateKernel, "FroxelIntegrated", integratedRT);
+            cmd.DispatchCompute(cs, m_IntegrateKernel,
+                Mathf.CeilToInt(res.x / 8f),
+                Mathf.CeilToInt(res.y / 8f),
+                1);
+        }
+
+        void SetApplyMaterialProperties(RenderTexture integratedRT)
+        {
+            m_ApplyMaterial.SetTexture(s_FroxelTex, integratedRT);
+            m_ApplyMaterial.SetFloat(s_FroxelNear, m_Settings.nearPlane);
+            m_ApplyMaterial.SetFloat(s_FroxelFar, m_Settings.maxDistance);
+            m_ApplyMaterial.SetFloat(s_DepthUniformity, m_Settings.depthUniformity);
+            m_ApplyMaterial.SetInt(s_FroxelResZ, m_Settings.froxelResolution.z);
+        }
+
+        // ============================================================
+        // Legacy Execute path (compatibility / Scene view fallback)
+        // ============================================================
+
+        public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
+        {
             if (m_FroxelScattering == null || m_FroxelIntegrated == null)
                 return;
 
-            // Collect active volumes
             CollectVolumeData();
             if (m_VolumeDataList.Count == 0)
                 return;
 
-            // Upload volume buffer
             EnsureVolumeBuffer(m_VolumeDataList.Count);
             m_VolumeDataBuffer.SetData(m_VolumeDataList);
 
-            var res = m_Settings.froxelResolution;
+            // Collect scene lights
+            CollectLightData(m_Settings.maxLights);
+            EnsureLightBuffer(m_LightDataList.Count);
+            if (m_LightDataList.Count > 0)
+                m_LightDataBuffer.SetData(m_LightDataList);
 
             // Camera matrices
-            Matrix4x4 view = cameraData.GetViewMatrix();
-            Matrix4x4 proj = cameraData.GetProjectionMatrix();
+            var cam = renderingData.cameraData.camera;
+            Matrix4x4 view = cam.worldToCameraMatrix;
+            Matrix4x4 proj = cam.projectionMatrix;
+            // GPU projection: false = Z-range correction only, no Y-flip (we handle Y in shader)
+            proj = GL.GetGPUProjectionMatrix(proj, false);
             Matrix4x4 viewProj = proj * view;
             Matrix4x4 invViewProj = viewProj.inverse;
 
-            // Import persistent textures into render graph
-            TextureHandle scatteringHandle = renderGraph.ImportTexture(m_FroxelScattering);
-            TextureHandle integratedHandle = renderGraph.ImportTexture(m_FroxelIntegrated);
-            TextureHandle historyHandle = renderGraph.ImportTexture(m_HistoryBuffer);
+            var cmd = CommandBufferPool.Get("Toaster Froxel");
 
-            // --------------------------------------------------------
-            // Compute pass (unsafe — manual CommandBuffer for 3 dispatches)
-            // --------------------------------------------------------
-            using (var builder = renderGraph.AddUnsafePass<ComputePassData>("Toaster Froxel Compute", out var passData))
+            // Get underlying RenderTextures from RTHandles
+            RenderTexture scatteringRT = m_FroxelScattering.rt;
+            RenderTexture integratedRT = m_FroxelIntegrated.rt;
+            RenderTexture historyRT = m_HistoryBuffer?.rt;
+
+            if (scatteringRT == null || integratedRT == null)
             {
-                passData.compute = m_Compute;
-                passData.settings = m_Settings;
-                passData.resolution = res;
-                passData.clearKernel = m_ClearKernel;
-                passData.injectKernel = m_InjectKernel;
-                passData.integrateKernel = m_IntegrateKernel;
-                passData.volumeBuffer = m_VolumeDataBuffer;
-                passData.volumeCount = m_VolumeDataList.Count;
-                passData.volumeGrids = m_VolumeGrids.ToArray();
-                passData.invViewProj = invViewProj;
-                passData.prevViewProj = m_PrevViewProj;
-                passData.frameIndex = m_FrameIndex;
-                passData.blueNoise = m_BlueNoise;
-
-                passData.scatteringHandle = scatteringHandle;
-                passData.integratedHandle = integratedHandle;
-                passData.historyHandle = historyHandle;
-
-                builder.UseTexture(scatteringHandle, AccessFlags.ReadWrite);
-                builder.UseTexture(integratedHandle, AccessFlags.ReadWrite);
-                builder.UseTexture(historyHandle, AccessFlags.Read);
-
-                builder.AllowPassCulling(false);
-
-                builder.SetRenderFunc((ComputePassData data, UnsafeGraphContext ctx) =>
-                {
-                    var cmd = CommandBufferHelpers.GetNativeCommandBuffer(ctx.cmd);
-                    ExecuteCompute(cmd, data);
-                });
+                CommandBufferPool.Release(cmd);
+                return;
             }
 
-            // --------------------------------------------------------
-            // Apply pass (fullscreen composite)
-            // --------------------------------------------------------
-            using (var builder = renderGraph.AddRasterRenderPass<ApplyPassData>("Toaster Froxel Apply", out var passData))
-            {
-                passData.applyMaterial = m_ApplyMaterial;
-                passData.settings = m_Settings;
-                passData.resolution = res;
-                passData.integratedHandle = integratedHandle;
+            // Dispatch compute
+            DispatchCompute(cmd, scatteringRT, integratedRT, historyRT, invViewProj, cam.transform.position);
 
-                builder.UseTexture(integratedHandle, AccessFlags.Read);
+            // Apply fullscreen
+            SetApplyMaterialProperties(integratedRT);
+            cmd.DrawProcedural(Matrix4x4.identity, m_ApplyMaterial, 0, MeshTopology.Triangles, 3);
 
-                // Write to active color target
-                builder.SetRenderAttachment(resourceData.activeColorTexture, 0);
-                // Read depth for depth-aware sampling
-                builder.UseTexture(resourceData.activeDepthTexture, AccessFlags.Read);
+            context.ExecuteCommandBuffer(cmd);
+            CommandBufferPool.Release(cmd);
 
-                builder.AllowPassCulling(false);
-
-                builder.SetRenderFunc((ApplyPassData data, RasterGraphContext ctx) =>
-                {
-                    ExecuteApply(ctx.cmd, data);
-                });
-            }
-
-            // Swap history for temporal reprojection
+            // Temporal swap
             if (m_Settings.enableTemporal)
             {
-                // Copy current scattering to history for next frame
-                // (Swap handles — next frame reads what we wrote this frame)
                 var temp = m_HistoryBuffer;
                 m_HistoryBuffer = m_FroxelScattering;
                 m_FroxelScattering = temp;
             }
 
-            // Update temporal state
             m_PrevViewProj = viewProj;
             m_FrameIndex++;
         }
 
         // ============================================================
-        // Compute execution
+        // RenderGraph path (URP 17 / Unity 6 default)
         // ============================================================
 
         class ComputePassData
@@ -275,68 +437,218 @@ namespace Toaster
             public GraphicsBuffer volumeBuffer;
             public int volumeCount;
             public Texture[] volumeGrids;
+            public GraphicsBuffer lightBuffer;
+            public int lightCount;
             public Matrix4x4 invViewProj;
             public Matrix4x4 prevViewProj;
+            public Vector3 cameraPos;
             public int frameIndex;
             public Texture2D blueNoise;
 
+            // Use RTHandles directly for texture access
+            public RTHandle scatteringRT;
+            public RTHandle integratedRT;
+            public RTHandle historyRT;
+            public bool enableTemporal;
+
+            // TextureHandles for RenderGraph resource tracking
             public TextureHandle scatteringHandle;
             public TextureHandle integratedHandle;
             public TextureHandle historyHandle;
         }
 
-        static readonly string[] s_VolumeGridNames = new string[]
+        class ApplyPassData
         {
-            "VolumeGrid0", "VolumeGrid1", "VolumeGrid2", "VolumeGrid3",
-            "VolumeGrid4", "VolumeGrid5", "VolumeGrid6", "VolumeGrid7"
-        };
+            public Material applyMaterial;
+            public ToasterFroxelFeature.Settings settings;
+            public RTHandle integratedRT;
+        }
 
-        static void ExecuteCompute(CommandBuffer cmd, ComputePassData data)
+        public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
+        {
+            var cameraData = frameData.Get<UniversalCameraData>();
+            var resourceData = frameData.Get<UniversalResourceData>();
+
+            if (m_FroxelScattering?.rt == null || m_FroxelIntegrated?.rt == null)
+                return;
+
+            CollectVolumeData();
+            if (m_VolumeDataList.Count == 0)
+                return;
+
+            EnsureVolumeBuffer(m_VolumeDataList.Count);
+            m_VolumeDataBuffer.SetData(m_VolumeDataList);
+
+            // Collect scene lights
+            CollectLightData(m_Settings.maxLights);
+            EnsureLightBuffer(m_LightDataList.Count);
+            if (m_LightDataList.Count > 0)
+                m_LightDataBuffer.SetData(m_LightDataList);
+
+            var res = m_Settings.froxelResolution;
+
+            // Camera matrices — Z-range correction only, no Y-flip (shader handles UV→NDC Y)
+            Matrix4x4 view = cameraData.GetViewMatrix();
+            Matrix4x4 proj = cameraData.GetProjectionMatrix();
+            proj = GL.GetGPUProjectionMatrix(proj, false);
+            Matrix4x4 viewProj = proj * view;
+            Matrix4x4 invViewProj = viewProj.inverse;
+
+            // Import persistent textures into render graph
+            TextureHandle scatteringHandle = renderGraph.ImportTexture(m_FroxelScattering);
+            TextureHandle integratedHandle = renderGraph.ImportTexture(m_FroxelIntegrated);
+            TextureHandle historyHandle = renderGraph.ImportTexture(m_HistoryBuffer);
+
+            // --------------------------------------------------------
+            // Compute pass (unsafe — manual CommandBuffer)
+            // --------------------------------------------------------
+            using (var builder = renderGraph.AddUnsafePass<ComputePassData>("Toaster Froxel Compute", out var passData))
+            {
+                passData.compute = m_Compute;
+                passData.settings = m_Settings;
+                passData.resolution = res;
+                passData.clearKernel = m_ClearKernel;
+                passData.injectKernel = m_InjectKernel;
+                passData.integrateKernel = m_IntegrateKernel;
+                passData.volumeBuffer = m_VolumeDataBuffer;
+                passData.volumeCount = m_VolumeDataList.Count;
+                passData.volumeGrids = m_VolumeGrids.ToArray();
+                passData.lightBuffer = m_LightDataBuffer;
+                passData.lightCount = m_LightDataList.Count;
+                passData.invViewProj = invViewProj;
+                passData.prevViewProj = m_PrevViewProj;
+                passData.cameraPos = cameraData.worldSpaceCameraPos;
+                passData.frameIndex = m_FrameIndex;
+                passData.blueNoise = m_BlueNoise;
+                passData.enableTemporal = m_Settings.enableTemporal;
+
+                // Pass RTHandles directly for texture access in render func
+                passData.scatteringRT = m_FroxelScattering;
+                passData.integratedRT = m_FroxelIntegrated;
+                passData.historyRT = m_HistoryBuffer;
+
+                // Declare resource usage for RenderGraph
+                passData.scatteringHandle = scatteringHandle;
+                passData.integratedHandle = integratedHandle;
+                passData.historyHandle = historyHandle;
+
+                builder.UseTexture(scatteringHandle, AccessFlags.ReadWrite);
+                builder.UseTexture(integratedHandle, AccessFlags.ReadWrite);
+                builder.UseTexture(historyHandle, AccessFlags.Read);
+
+                builder.AllowPassCulling(false);
+
+                builder.SetRenderFunc((ComputePassData data, UnsafeGraphContext ctx) =>
+                {
+                    var cmd = CommandBufferHelpers.GetNativeCommandBuffer(ctx.cmd);
+                    ExecuteComputeRG(cmd, data);
+                });
+            }
+
+            // --------------------------------------------------------
+            // Apply pass (raster — draws fullscreen triangle into camera color)
+            // --------------------------------------------------------
+            using (var builder = renderGraph.AddRasterRenderPass<ApplyPassData>("Toaster Froxel Apply", out var passData))
+            {
+                passData.applyMaterial = m_ApplyMaterial;
+                passData.settings = m_Settings;
+                passData.integratedRT = m_FroxelIntegrated;
+
+                // Read the integrated froxel texture
+                builder.UseTexture(integratedHandle);
+
+                // Bind camera color as render target, depth for reading
+                builder.SetRenderAttachment(resourceData.activeColorTexture, 0);
+                if (resourceData.activeDepthTexture.IsValid())
+                    builder.SetRenderAttachmentDepth(resourceData.activeDepthTexture);
+
+                builder.AllowPassCulling(false);
+
+                builder.SetRenderFunc((ApplyPassData data, RasterGraphContext ctx) =>
+                {
+                    var mat = data.applyMaterial;
+                    RenderTexture intRT = data.integratedRT.rt;
+                    if (intRT == null) return;
+
+                    mat.SetTexture(s_FroxelTex, intRT);
+                    mat.SetFloat(s_FroxelNear, data.settings.nearPlane);
+                    mat.SetFloat(s_FroxelFar, data.settings.maxDistance);
+                    mat.SetFloat(s_DepthUniformity, data.settings.depthUniformity);
+                    mat.SetInt(s_FroxelResZ, data.settings.froxelResolution.z);
+
+                    ctx.cmd.DrawProcedural(Matrix4x4.identity, mat, 0, MeshTopology.Triangles, 3);
+                });
+            }
+
+            // Temporal swap
+            if (m_Settings.enableTemporal)
+            {
+                var temp = m_HistoryBuffer;
+                m_HistoryBuffer = m_FroxelScattering;
+                m_FroxelScattering = temp;
+            }
+
+            m_PrevViewProj = viewProj;
+            m_FrameIndex++;
+        }
+
+        static void ExecuteComputeRG(CommandBuffer cmd, ComputePassData data)
         {
             var cs = data.compute;
             var res = data.resolution;
 
-            // -- Shared uniforms --
-            cmd.SetComputeIntParam(cs, "_FroxelResX", res.x);
-            cmd.SetComputeIntParam(cs, "_FroxelResY", res.y);
-            cmd.SetComputeIntParam(cs, "_FroxelResZ", res.z);
-            cmd.SetComputeFloatParam(cs, "_FroxelNear", data.settings.nearPlane);
-            cmd.SetComputeFloatParam(cs, "_FroxelFar", data.settings.maxDistance);
-            cmd.SetComputeFloatParam(cs, "_DepthUniformity", data.settings.depthUniformity);
-            cmd.SetComputeMatrixParam(cs, "_InvViewProj", data.invViewProj);
-            cmd.SetComputeMatrixParam(cs, "_PrevViewProj", data.prevViewProj);
-            cmd.SetComputeIntParam(cs, "_FrameIndex", data.frameIndex);
-            cmd.SetComputeFloatParam(cs, "_FogDensity", data.settings.fogDensity);
-            cmd.SetComputeFloatParam(cs, "_FogIntensity", data.settings.fogIntensity);
+            // Shared uniforms
+            cmd.SetComputeIntParam(cs, s_FroxelResX, res.x);
+            cmd.SetComputeIntParam(cs, s_FroxelResY, res.y);
+            cmd.SetComputeIntParam(cs, s_FroxelResZ, res.z);
+            cmd.SetComputeFloatParam(cs, s_FroxelNear, data.settings.nearPlane);
+            cmd.SetComputeFloatParam(cs, s_FroxelFar, data.settings.maxDistance);
+            cmd.SetComputeFloatParam(cs, s_DepthUniformity, data.settings.depthUniformity);
+            cmd.SetComputeMatrixParam(cs, s_InvViewProj, data.invViewProj);
+            cmd.SetComputeMatrixParam(cs, s_PrevViewProj, data.prevViewProj);
+            cmd.SetComputeIntParam(cs, s_FrameIndex, data.frameIndex);
+            cmd.SetComputeFloatParam(cs, s_FogDensity, data.settings.fogDensity);
+            cmd.SetComputeFloatParam(cs, s_FogIntensity, data.settings.fogIntensity);
+            cmd.SetComputeVectorParam(cs, s_AmbientFogColor, data.settings.ambientColor);
+            cmd.SetComputeVectorParam(cs, s_CameraPos, data.cameraPos);
+            cmd.SetComputeFloatParam(cs, s_ScatterAnisotropy, data.settings.scatterAnisotropy);
 
             if (data.blueNoise != null)
                 cmd.SetComputeTextureParam(cs, data.injectKernel, "_BlueNoise", data.blueNoise);
 
-            // -- 1. Clear froxels --
-            cmd.SetComputeTextureParam(cs, data.clearKernel, "FroxelScattering", data.scatteringHandle);
+            // Use RTHandle.rt for texture binding (not TextureHandle)
+            RenderTexture scatRT = data.scatteringRT.rt;
+            RenderTexture intRT = data.integratedRT.rt;
+
+            // 1. Clear
+            cmd.SetComputeTextureParam(cs, data.clearKernel, "FroxelScattering", scatRT);
             cmd.DispatchCompute(cs, data.clearKernel,
                 Mathf.CeilToInt(res.x / 4f),
                 Mathf.CeilToInt(res.y / 4f),
                 Mathf.CeilToInt(res.z / 4f));
 
-            // -- 2. Inject media --
-            cmd.SetComputeTextureParam(cs, data.injectKernel, "FroxelScattering", data.scatteringHandle);
+            // 2. Inject
+            cmd.SetComputeTextureParam(cs, data.injectKernel, "FroxelScattering", scatRT);
 
-            // Temporal reprojection
-            if (data.settings.enableTemporal)
+            if (data.enableTemporal && data.historyRT?.rt != null)
             {
-                cmd.SetComputeTextureParam(cs, data.injectKernel, "FroxelHistory", data.historyHandle);
-                cmd.SetComputeFloatParam(cs, "_TemporalBlendAlpha", data.settings.temporalBlendAlpha);
+                cmd.SetComputeTextureParam(cs, data.injectKernel, "FroxelHistory", data.historyRT.rt);
+                cmd.SetComputeFloatParam(cs, s_TemporalBlendAlpha, data.settings.temporalBlendAlpha);
             }
 
-            // Volume data
             cmd.SetComputeBufferParam(cs, data.injectKernel, "_VolumeDataBuffer", data.volumeBuffer);
-            cmd.SetComputeIntParam(cs, "_VolumeCount", data.volumeCount);
+            cmd.SetComputeIntParam(cs, s_VolumeCount, data.volumeCount);
 
-            // Bind volume grids (up to 8 named slots)
-            for (int i = 0; i < data.volumeGrids.Length && i < MAX_VOLUME_GRIDS; i++)
+            // Bind light data
+            cmd.SetComputeBufferParam(cs, data.injectKernel, "_LightDataBuffer", data.lightBuffer);
+            cmd.SetComputeIntParam(cs, s_LightCount, data.lightCount);
+
+            // Bind all 8 grid slots — unused slots get first grid to silence DX11
+            Texture fallbackGrid = data.volumeGrids.Length > 0 ? data.volumeGrids[0] : scatRT;
+            for (int i = 0; i < MAX_VOLUME_GRIDS; i++)
             {
-                cmd.SetComputeTextureParam(cs, data.injectKernel, s_VolumeGridNames[i], data.volumeGrids[i]);
+                var tex = i < data.volumeGrids.Length ? data.volumeGrids[i] : fallbackGrid;
+                cmd.SetComputeTextureParam(cs, data.injectKernel, s_VolumeGridNames[i], tex);
             }
 
             cmd.DispatchCompute(cs, data.injectKernel,
@@ -344,38 +656,13 @@ namespace Toaster
                 Mathf.CeilToInt(res.y / 4f),
                 Mathf.CeilToInt(res.z / 4f));
 
-            // -- 3. Integrate froxels --
-            cmd.SetComputeTextureParam(cs, data.integrateKernel, "FroxelScattering", data.scatteringHandle);
-            cmd.SetComputeTextureParam(cs, data.integrateKernel, "FroxelIntegrated", data.integratedHandle);
+            // 3. Integrate
+            cmd.SetComputeTextureParam(cs, data.integrateKernel, "FroxelScattering", scatRT);
+            cmd.SetComputeTextureParam(cs, data.integrateKernel, "FroxelIntegrated", intRT);
             cmd.DispatchCompute(cs, data.integrateKernel,
                 Mathf.CeilToInt(res.x / 8f),
                 Mathf.CeilToInt(res.y / 8f),
                 1);
-        }
-
-        // ============================================================
-        // Apply execution
-        // ============================================================
-
-        class ApplyPassData
-        {
-            public Material applyMaterial;
-            public ToasterFroxelFeature.Settings settings;
-            public Vector3Int resolution;
-            public TextureHandle integratedHandle;
-        }
-
-        static void ExecuteApply(RasterCommandBuffer cmd, ApplyPassData data)
-        {
-            var mat = data.applyMaterial;
-
-            mat.SetTexture("_FroxelTex", data.integratedHandle);
-            mat.SetFloat("_FroxelNear", data.settings.nearPlane);
-            mat.SetFloat("_FroxelFar", data.settings.maxDistance);
-            mat.SetFloat("_DepthUniformity", data.settings.depthUniformity);
-            mat.SetInt("_FroxelResZ", data.settings.froxelResolution.z);
-
-            cmd.DrawProcedural(Matrix4x4.identity, mat, 0, MeshTopology.Triangles, 3);
         }
 
         // ============================================================
@@ -387,6 +674,8 @@ namespace Toaster
             ReleaseRenderTargets();
             m_VolumeDataBuffer?.Release();
             m_VolumeDataBuffer = null;
+            m_LightDataBuffer?.Release();
+            m_LightDataBuffer = null;
         }
     }
 }

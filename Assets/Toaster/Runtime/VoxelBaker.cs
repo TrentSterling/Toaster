@@ -156,8 +156,8 @@ namespace Toaster
             voxelizerCompute.Dispatch(clearAccumKernel,
                 Mathf.CeilToInt(totalVoxels * 4 / 64f), 1, 1);
 
-            // 3. Setup Temp Meta Texture
-            RenderTexture metaTempRT = RenderTexture.GetTemporary(256, 256, 0, RenderTextureFormat.ARGB32);
+            // 3. Setup Temp Meta Texture (ARGBHalf for HDR emission support)
+            RenderTexture metaTempRT = RenderTexture.GetTemporary(256, 256, 0, RenderTextureFormat.ARGBHalf);
 
             // 4. Find and filter renderers, then batch geometry into mega-buffers
             var renderers = FindObjectsByType<MeshRenderer>(FindObjectsSortMode.None);
@@ -329,7 +329,8 @@ namespace Toaster
                 cmd.SetRenderTarget(metaTempRT);
                 cmd.ClearRenderTarget(true, true, baseColor);
                 cmd.SetGlobalVector("unity_MetaVertexControl", new Vector4(1, 0, 0, 0));
-                cmd.SetGlobalVector("unity_MetaFragmentControl", new Vector4(1, 0, 0, 0));
+                // x=1: output albedo, y=1: add emission — captures both in one pass
+                cmd.SetGlobalVector("unity_MetaFragmentControl", new Vector4(1, 1, 0, 0));
                 cmd.SetGlobalVector("unity_LightmapST", new Vector4(1, 1, 0, 0));
 
                 bool generatedUV1 = false;

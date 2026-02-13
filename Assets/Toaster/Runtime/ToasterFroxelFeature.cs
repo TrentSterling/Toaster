@@ -25,13 +25,25 @@ namespace Toaster
             public float depthUniformity = 0.5f;
 
             [Header("Fog")]
-            [Tooltip("Global fog density multiplier.")]
-            [Range(0f, 5f)]
-            public float fogDensity = 1f;
+            [Tooltip("Base fog density. Controls how thick the fog medium is.")]
+            [Range(0f, 1f)]
+            public float fogDensity = 0.03f;
 
-            [Tooltip("Global fog intensity (color brightness) multiplier.")]
+            [Tooltip("How strongly baked light colors the fog.")]
             [Range(0f, 10f)]
             public float fogIntensity = 1f;
+
+            [Tooltip("Ambient fog color — provides base haze even in unlit areas.")]
+            public Color ambientColor = new Color(0.02f, 0.02f, 0.04f, 1f);
+
+            [Header("Lighting")]
+            [Tooltip("Maximum number of scene lights to evaluate per froxel.")]
+            [Range(0, 32)]
+            public int maxLights = 16;
+
+            [Tooltip("Scattering anisotropy (Henyey-Greenstein g). 0 = isotropic, >0 = forward scatter, <0 = back scatter.")]
+            [Range(-0.99f, 0.99f)]
+            public float scatterAnisotropy = 0.3f;
 
             [Header("Temporal")]
             [Tooltip("Enable temporal reprojection for smoother fog.")]
@@ -65,6 +77,9 @@ namespace Toaster
 
             m_FroxelPass = new ToasterFroxelPass();
             m_FroxelPass.renderPassEvent = RenderPassEvent.BeforeRenderingTransparents;
+
+            // Request depth texture so _CameraDepthTexture is available
+            m_FroxelPass.ConfigureInput(ScriptableRenderPassInput.Depth);
         }
 
         public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)

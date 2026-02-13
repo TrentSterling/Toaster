@@ -15,7 +15,6 @@ RWTexture3D<float4> FroxelIntegrated;  // (accLight.rgb, transmittance)
 
 #ifdef TEMPORAL_REPROJECTION
 Texture3D<float4> FroxelHistory;       // Previous frame's scattering
-SamplerState samplerFroxelHistory;
 float _TemporalBlendAlpha;             // EMA blend weight (0.05 = 95% history)
 #endif
 
@@ -42,11 +41,30 @@ Texture3D<float4> VolumeGrid4;
 Texture3D<float4> VolumeGrid5;
 Texture3D<float4> VolumeGrid6;
 Texture3D<float4> VolumeGrid7;
-SamplerState samplerVolumeGrid0; // Shared trilinear sampler
+
+// Unity inline sampler — guaranteed bilinear + clamp, no manual binding needed
+SamplerState sampler_linear_clamp;
 
 // Global fog params
 float _FogDensity;
 float _FogIntensity;
+float4 _AmbientFogColor;
+
+// ============================================================
+// Scene lights
+// ============================================================
+
+struct LightGPUData
+{
+    float4 positionAndRange;    // xyz = position, w = range
+    float4 colorAndIntensity;   // rgb = color, w = intensity
+    float4 directionAndAngle;   // xyz = forward dir, w = cos(spotAngle * 0.5)
+    float4 typeAndFlags;        // x = type (0=point, 1=spot, 2=directional), y = cos(innerAngle)
+};
+
+StructuredBuffer<LightGPUData> _LightDataBuffer;
+int _LightCount;
+float _ScatterAnisotropy; // Henyey-Greenstein g parameter (-1..1)
 
 // ============================================================
 // Helpers
@@ -57,16 +75,83 @@ float4 SampleVolumeGrid(int gridIndex, float3 uvw)
     // Switch-case dispatch — HLSL can't index Texture3D arrays
     switch (gridIndex)
     {
-        case 0: return VolumeGrid0.SampleLevel(samplerVolumeGrid0, uvw, 0);
-        case 1: return VolumeGrid1.SampleLevel(samplerVolumeGrid0, uvw, 0);
-        case 2: return VolumeGrid2.SampleLevel(samplerVolumeGrid0, uvw, 0);
-        case 3: return VolumeGrid3.SampleLevel(samplerVolumeGrid0, uvw, 0);
-        case 4: return VolumeGrid4.SampleLevel(samplerVolumeGrid0, uvw, 0);
-        case 5: return VolumeGrid5.SampleLevel(samplerVolumeGrid0, uvw, 0);
-        case 6: return VolumeGrid6.SampleLevel(samplerVolumeGrid0, uvw, 0);
-        case 7: return VolumeGrid7.SampleLevel(samplerVolumeGrid0, uvw, 0);
+        case 0: return VolumeGrid0.SampleLevel(sampler_linear_clamp, uvw, 0);
+        case 1: return VolumeGrid1.SampleLevel(sampler_linear_clamp, uvw, 0);
+        case 2: return VolumeGrid2.SampleLevel(sampler_linear_clamp, uvw, 0);
+        case 3: return VolumeGrid3.SampleLevel(sampler_linear_clamp, uvw, 0);
+        case 4: return VolumeGrid4.SampleLevel(sampler_linear_clamp, uvw, 0);
+        case 5: return VolumeGrid5.SampleLevel(sampler_linear_clamp, uvw, 0);
+        case 6: return VolumeGrid6.SampleLevel(sampler_linear_clamp, uvw, 0);
+        case 7: return VolumeGrid7.SampleLevel(sampler_linear_clamp, uvw, 0);
         default: return float4(0, 0, 0, 0);
     }
+}
+
+// Henyey-Greenstein phase function — anisotropic light scattering
+// g > 0 = forward scattering (looking into light), g < 0 = back scattering, g = 0 = isotropic
+float HenyeyGreenstein(float cosTheta, float g)
+{
+    float g2 = g * g;
+    float denom = 1.0 + g2 - 2.0 * g * cosTheta;
+    return (1.0 - g2) / (4.0 * 3.14159265 * pow(abs(denom), 1.5));
+}
+
+// Evaluate a single scene light at a world position
+float3 EvaluateLight(LightGPUData light, float3 worldPos, float3 viewDir)
+{
+    int lightType = (int)light.typeAndFlags.x;
+    float3 lightColor = light.colorAndIntensity.rgb * light.colorAndIntensity.w;
+
+    float3 toLight;
+    float attenuation = 1.0;
+
+    if (lightType == 2) // Directional
+    {
+        toLight = -light.directionAndAngle.xyz;
+        // No distance attenuation for directional
+    }
+    else // Point or Spot
+    {
+        float3 delta = light.positionAndRange.xyz - worldPos;
+        float dist = length(delta);
+        float range = light.positionAndRange.w;
+
+        if (dist >= range) return float3(0, 0, 0);
+
+        toLight = delta / max(dist, 0.001);
+
+        // Smooth distance attenuation (URP style)
+        float distNorm = dist / range;
+        float distNorm2 = distNorm * distNorm;
+        float falloff = saturate(1.0 - distNorm2 * distNorm2);
+        attenuation = (falloff * falloff) / max(dist * dist, 0.0001);
+
+        // Spot cone attenuation
+        if (lightType == 1)
+        {
+            float cosOuter = light.directionAndAngle.w;
+            float cosInner = light.typeAndFlags.y;
+            float cosAngle = dot(-toLight, light.directionAndAngle.xyz);
+            attenuation *= saturate((cosAngle - cosOuter) / max(cosInner - cosOuter, 0.001));
+        }
+    }
+
+    // Phase function — how much light scatters toward the camera
+    float cosTheta = dot(toLight, viewDir);
+    float phase = HenyeyGreenstein(cosTheta, _ScatterAnisotropy);
+
+    return lightColor * attenuation * phase;
+}
+
+// Evaluate all scene lights at a world position
+float3 EvaluateSceneLights(float3 worldPos, float3 viewDir)
+{
+    float3 totalLight = float3(0, 0, 0);
+    for (int i = 0; i < _LightCount; i++)
+    {
+        totalLight += EvaluateLight(_LightDataBuffer[i], worldPos, viewDir);
+    }
+    return totalLight;
 }
 
 // Edge falloff — fade density near volume boundaries for smooth overlap
@@ -106,6 +191,9 @@ void InjectMedia(uint3 id : SV_DispatchThreadID)
     // Reconstruct world position for this froxel
     float3 worldPos = FroxelToWorld(id, jitter);
 
+    // View direction from camera to froxel (for phase function)
+    float3 viewDir = normalize(worldPos - _CameraPos);
+
     // Accumulate scattering and extinction from all volumes
     float3 scattering = float3(0, 0, 0);
     float extinction = 0.0;
@@ -127,15 +215,23 @@ void InjectMedia(uint3 id : SV_DispatchThreadID)
         // Edge falloff
         float edgeFade = EdgeFalloff(uvw, vol.settings.w);
 
-        // Sample the volume's lighting/albedo grid
+        // Uniform fog density — exists everywhere in the volume (like real atmosphere)
+        float baseDensity = vol.settings.x * _FogDensity * edgeFade;
+
+        // Sample baked lighting for the in-scattered light color
         int gridIdx = (int)vol.settings.z;
         float4 voxelData = SampleVolumeGrid(gridIdx, uvw);
 
-        float density = voxelData.a * vol.settings.x * _FogDensity * edgeFade;
-        float3 color = voxelData.rgb * vol.settings.y * _FogIntensity;
+        // Fog color = (baked light + ambient) scaled by intensity
+        float3 lightColor = (voxelData.rgb + _AmbientFogColor.rgb)
+                          * vol.settings.y * _FogIntensity;
 
-        scattering += color * density;
-        extinction += density;
+        // Add direct scene light contribution (evaluated per-froxel with phase function)
+        float3 directLight = EvaluateSceneLights(worldPos, viewDir);
+        lightColor += directLight;
+
+        scattering += lightColor * baseDensity;
+        extinction += baseDensity;
     }
 
     float4 result = float4(scattering, extinction);
@@ -158,7 +254,7 @@ void InjectMedia(uint3 id : SV_DispatchThreadID)
             float prevSlice = DepthToSlice(prevDepth); // Approximate — assumes similar depth distribution
             float3 historyUVW = float3(prevUV, prevSlice / (float)_FroxelResZ);
 
-            float4 history = FroxelHistory.SampleLevel(samplerFroxelHistory, historyUVW, 0);
+            float4 history = FroxelHistory.SampleLevel(sampler_linear_clamp, historyUVW, 0);
 
             // Exponential moving average
             result = lerp(history, result, _TemporalBlendAlpha);

@@ -60,10 +60,11 @@ Shader "Toaster/DebugPointCloud"
                 int quadVert = vertexID;
 
                 // Convert linear index to 3D grid coords
-                int z = voxelIdx / (res.x * res.y);
-                int rem = voxelIdx - z * res.x * res.y;
-                int y = rem / res.x;
-                int x = rem - y * res.x;
+                uint uz = (uint)voxelIdx / ((uint)res.x * (uint)res.y);
+                uint urem = (uint)voxelIdx - uz * (uint)res.x * (uint)res.y;
+                uint uy = urem / (uint)res.x;
+                uint ux = urem - uy * (uint)res.x;
+                int x = (int)ux, y = (int)uy, z = (int)uz;
 
                 // Sample voxel data
                 float3 uvw = (float3(x, y, z) + 0.5) / float3(res);
