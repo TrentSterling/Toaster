@@ -34,14 +34,21 @@ Written as: `LightingGrid[id] = float4(AccumulatedLight.rgb, VoxelDensity);`
 ## Key Files
 
 ### Core Pipeline
-- `Assets/Toaster/Runtime/Toaster.cs` — Namespace root, static `Appliance` class, version `0.6 (Crumb)`, `BrowningLevel` enum, utility logging
+- `Assets/Toaster/Runtime/Toaster.cs` — Namespace root, static `Appliance` class, version `0.8 (Crumb)`, `BrowningLevel` enum, utility logging
 - `Assets/Toaster/Runtime/VoxelBaker.cs` — C# orchestrator: voxel grid setup, Meta Pass via CommandBuffer, compute dispatch, auto-wire visualizers, auto-fit bounds, serialization, incremental bake, buffer pooling
 - `Assets/Toaster/Runtime/Shaders/Voxelizer.compute` — Kernels: `VoxelizeMesh` (SAT triangle-box, atomic accum), `ClearGrid`, `ClearAccum`, `FinalizeGrid`
 - `Assets/Toaster/Runtime/ToasterTracer.cs` — Path tracer orchestrator: gathers scene lights, uploads GPU buffers, dispatches trace
 - `Assets/Toaster/Runtime/Shaders/ToasterTracer.compute` — Kernels: `TraceLight` (Halton sampling, DDA march, multi-bounce, shadow rays), `ClearLighting`
 
+### Froxel Fog Pipeline (v0.8+)
+- `Assets/Toaster/Runtime/ToasterFroxelFeature.cs` — ScriptableRendererFeature: settings, references, pass lifecycle
+- `Assets/Toaster/Runtime/ToasterFroxelPass.cs` — RenderGraph pass: RTHandle 3D textures, compute dispatch, volume data upload, fullscreen apply
+- `Assets/Toaster/Runtime/Shaders/ToasterFroxelCommon.hlsl` — Shared HLSL: Frostbite depth distribution, FroxelToWorld, blue noise jitter
+- `Assets/Toaster/Runtime/Shaders/ToasterFroxel.compute` — Kernels: `ClearFroxels`, `InjectMedia` (multi-volume + temporal), `IntegrateFroxels` (Beer-Lambert)
+- `Assets/Toaster/Runtime/Shaders/ToasterFroxelApply.shader` — Fullscreen triangle composite (Blend One SrcAlpha, depth-aware)
+
 ### Shaders
-- `Assets/Toaster/Runtime/Shaders/ToasterVolume.shader` — URP volumetric fog raymarcher with optional _LightingTex toggle and additive blend
+- `Assets/Toaster/Runtime/Shaders/ToasterVolume.shader` — URP volumetric fog raymarcher with optional _LightingTex toggle and additive blend (legacy fallback)
 - `Assets/Toaster/Runtime/Shaders/ToasterDebugSlice.shader` — Z-slice debug quad
 - `Assets/Toaster/Runtime/Shaders/ToasterDebugHeatmap.shader` — False-color heatmap with channel isolation
 - `Assets/Toaster/Runtime/Shaders/ToasterDebugIsosurface.shader` — Raymarched surfaces with gradient normals
@@ -50,9 +57,11 @@ Written as: `LightingGrid[id] = float4(AccumulatedLight.rgb, VoxelDensity);`
 - `Assets/Toaster/Runtime/Shaders/ToasterSample.hlsl` — Shader Graph Custom Function include (ToasterSampleVolume, ToasterSampleLighting, ToasterSampleFog)
 
 ### Components & Editor
+- `Assets/Toaster/Runtime/ToasterVolume.cs` — Volume component: static `ActiveVolumes` registry, `LightingGrid` property, per-volume froxel density/intensity/edgeFalloff
 - `Assets/Toaster/Runtime/VoxelPointCloudRenderer.cs` — Graphics.DrawProcedural point cloud renderer
-- `Assets/Toaster/Editor/ToasterDemoSetup.cs` — "Toaster > Create Demo Scene" and "Toaster > Create Demo Scene && Bake" menu items
-- `Assets/Toaster/Editor/ToasterEditorWindow.cs` — "Toaster > Baker Window" — bake/trace buttons, grid stats, auto-fit, preview
+- `Assets/Toaster/Editor/ToasterDemoSetup.cs` — "Toaster > Create Demo Scene" — corridor with pillars, neon emissives, dramatic lighting
+- `Assets/Toaster/Editor/ToasterEditorWindow.cs` — "Toaster > Baker Window" — bake/trace buttons, grid stats, auto-fit, froxel setup, preview
+- `Assets/Toaster/Editor/BlueNoiseGenerator.cs` — "Toaster > Generate Blue Noise Texture" — 128x128 R8 Mitchell's best candidate
 - `Assets/Toaster/TODO.md` — Project roadmap and task tracking
 - `Assets/Toaster/FUTURE.md` — Advanced techniques research
 
@@ -66,7 +75,7 @@ Written as: `LightingGrid[id] = float4(AccumulatedLight.rgb, VoxelDensity);`
 ## Conventions
 
 - Namespace: `Toaster`
-- Version: `0.6 (Crumb)`
+- Version: `0.8 (Crumb)`
 - Browning levels: Raw (low res), Light (med res), Burnt (high res)
 - Log prefix: `[TOASTER]`
 

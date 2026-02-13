@@ -34,37 +34,68 @@ Working: Full pipeline — Material bake (Meta Pass) + GPU voxelization + path t
 - [x] LOD mipmaps + incremental bake (dirty tracking)
 - [x] Shader Graph integration (ToasterSample.hlsl — 3 custom function nodes)
 - [x] Auto-fit bounds from scene geometry
+- [x] Froxel volumetric fog pipeline — screen-space frustum-aligned 3D grid with Beer-Lambert integration
+- [x] Multi-volume froxel injection — up to 8 volumes composited via StructuredBuffer + named texture slots
+- [x] Temporal reprojection on froxel scattering — EMA blend with history buffer, previous ViewProj reprojection
+- [x] Static volume registry — ToasterVolume.ActiveVolumes for froxel pipeline auto-discovery
+- [x] Demo scene upgrade — corridor with pillars, arches, neon strips, dramatic colored lighting
 
 ---
 
-## Remaining / Future
+## v0.9 Sprint — Wire + Test Froxel Pipeline
+
+### Critical (must work before calling it done)
+- [ ] Wire froxel feature into URP renderer — add ToasterFroxelFeature to PC_Renderer.asset programmatically or document manual setup
+- [ ] Blue noise texture — generate or embed 128x128 R8 blue noise PNG for jitter
+- [ ] Test froxel fog in Play mode — verify fog renders depth-correctly with baked volumes
+- [ ] Fix any RenderGraph API issues — URP 17 API may need adjustments (AddUnsafePass, RTHandle lifecycle)
+- [ ] Temporal keyword toggle — enable/disable TEMPORAL_REPROJECTION multi_compile at runtime
+
+### Froxel Quality
+- [ ] Phase function — Henyey-Greenstein or Mie scattering instead of isotropic
+- [ ] Height fog falloff — remap world Y between base/max height with sqrt density curve
+- [ ] Anisotropic scattering — directional response to main light for god rays
+- [ ] Froxel debug visualizer — 3D texture slice viewer for FroxelScattering/Integrated
+- [ ] Exposure/tonemapping on fog — HDR fog values can blow out, need soft clamp
 
 ### Bake Quality
 - [ ] Barycentric UV interpolation improvement — project voxel center onto triangle plane for exact UV
 - [ ] Conservative rasterization — ensure thin geometry doesn't miss voxels
 - [ ] Anti-aliased voxelization — partial coverage for voxels on geometry edges
 
-### Tools
+### Editor / Tools
+- [ ] Froxel settings in editor window — expose froxel resolution, depth params, fog density in Baker Window
+- [ ] One-click froxel setup — button in editor window to add feature to active renderer
 - [ ] Progress bar for bake (via `EditorUtility.DisplayProgressBar`)
 - [ ] Undo support for bake operations
-- [ ] Scene view overlay showing voxel grid stats
+- [ ] Scene view overlay showing voxel grid stats + froxel stats
+- [ ] Froxel gizmo — draw froxel grid frustum wireframe in scene view
 
 ### Performance
 - [ ] Mesh batching — combine all geometry into one mega-buffer, single dispatch
 - [ ] Async GPU readback for diagnostics instead of blocking `ReadPixels`
+- [ ] Froxel resolution auto-scaling — reduce resolution when GPU budget exceeded
+- [ ] Early-out in InjectMedia — skip froxels with no active volumes nearby (spatial hash)
 
-### Runtime
-- [x] Froxel volumetric fog pipeline — screen-space frustum-aligned 3D grid with Beer-Lambert integration
-- [x] Multi-volume froxel injection — up to 8 volumes composited via StructuredBuffer + named texture slots
-- [x] Temporal reprojection on froxel scattering — EMA blend with history buffer, previous ViewProj reprojection
-- [x] Static volume registry — ToasterVolume.ActiveVolumes for froxel pipeline auto-discovery
+### Runtime Polish
 - [ ] Density field support — separate density channel or derive from voxel occupancy
 - [ ] Material property override for per-object voxel color tint
+- [ ] Wind-driven noise — animated 3D noise offset for fog movement
+- [ ] Light cookie support — project light cookies into froxel injection
+- [ ] Particle fog injection — let particle systems contribute density to froxels
+
+### Demo Scene
+- [ ] Add second overlapping volume — test multi-volume blending in corridor
+- [ ] Add moving light — test temporal reprojection stability
+- [ ] Camera fly-through path — scripted camera for consistent testing
+- [ ] Before/after toggle — switch between raymarcher and froxel fog for comparison
 
 ### Future (see FUTURE.md)
 - [ ] Sparse brickmap storage
 - [ ] Clipmap compositing (near/far cascades)
 - [ ] DXR hardware ray tracing for shadow rays
+- [ ] Mip Sky Fog (Uncharted 4 technique) — sample sky cubemap at distance for atmospheric perspective
+- [ ] VR/Stereo — double-width integration buffer with IPD parallax
 
 ---
 
@@ -78,3 +109,4 @@ Working: Full pipeline — Material bake (Meta Pass) + GPU voxelization + path t
 | Multi-Slice | `Toaster/DebugMultiSlice` | Hologram-style Y-slices, optional animation |
 | Point Cloud | `Toaster/DebugPointCloud` | Billboard per occupied voxel (procedural draw) |
 | Volume Fog | `Toaster/Volume` | Production raymarched volumetric fog |
+| Froxel Fog | `Toaster/FroxelApply` | Screen-space Beer-Lambert composited fog (v0.8+) |
