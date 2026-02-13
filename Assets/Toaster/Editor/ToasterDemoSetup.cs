@@ -846,13 +846,13 @@ namespace Toaster
 
             // Sponza is ~25m long — maxDistance should cover the full courtyard
             float maxDist = Mathf.Max(sponzaBounds.size.x, sponzaBounds.size.z) * 3f;
-            froxelFeature.settings.fogDensity = 0.008f;
-            froxelFeature.settings.fogIntensity = 0.5f;
-            froxelFeature.settings.scatteringAlbedo = 5f;
-            froxelFeature.settings.ambientColor = new Color(0.06f, 0.05f, 0.08f, 1f);
-            froxelFeature.settings.lightDensityBoost = 2f;
+            froxelFeature.settings.fogDensity = 0.015f;       // light haze — visible but see-through
+            froxelFeature.settings.fogIntensity = 3f;          // baked light needs to punch through
+            froxelFeature.settings.scatteringAlbedo = 1.5f;    // moderate scatter, not washed out
+            froxelFeature.settings.ambientColor = new Color(0.03f, 0.025f, 0.04f, 1f); // subtle cool fill
+            froxelFeature.settings.lightDensityBoost = 1f;     // gentle halo around lights
             froxelFeature.settings.maxDistance = maxDist;
-            froxelFeature.settings.scatterAnisotropy = 0.4f;
+            froxelFeature.settings.scatterAnisotropy = 0.3f;
             froxelFeature.settings.enableTemporal = true;
             froxelFeature.settings.temporalBlendAlpha = 0.2f;
             froxelFeature.settings.debugMode = ToasterFroxelFeature.DebugMode.Off;
@@ -860,7 +860,7 @@ namespace Toaster
             EditorUtility.SetDirty(froxelFeature);
             EditorUtility.SetDirty(rendererData);
             AssetDatabase.SaveAssets();
-            Appliance.Log($"Froxel configured for Sponza: density=0.008, albedo=5, lightBoost=2, maxDist={maxDist:F0}");
+            Appliance.Log($"Froxel configured for Sponza: density=0.015, intensity=3, albedo=1.5, maxDist={maxDist:F0}");
         }
 
         private static void ConfigureFroxelForScene2()
