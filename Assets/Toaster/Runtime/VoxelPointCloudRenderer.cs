@@ -6,7 +6,7 @@ namespace Toaster
     public class VoxelPointCloudRenderer : MonoBehaviour
     {
         [Header("Data")]
-        public RenderTexture volumeTexture;
+        public Texture volumeTexture;
         public Vector3 boundsMin = new Vector3(-6, -4, -6);
         public Vector3 boundsMax = new Vector3(6, 4, 6);
         public Vector3Int gridResolution = new Vector3Int(48, 32, 48);
@@ -19,9 +19,9 @@ namespace Toaster
 
         public void ConfigureFromBaker(VoxelBaker baker)
         {
-            if (baker == null || baker.voxelGrid == null) return;
+            if (baker == null) return;
 
-            volumeTexture = baker.voxelGrid;
+            volumeTexture = baker.GetActiveGrid();
             boundsMin = baker.transform.position - baker.boundsSize / 2;
             boundsMax = baker.transform.position + baker.boundsSize / 2;
             gridResolution = new Vector3Int(

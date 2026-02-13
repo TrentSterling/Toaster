@@ -1,5 +1,7 @@
 #pragma kernel VoxelizeMesh
 #pragma kernel ClearGrid
+#pragma kernel ClearAccum
+#pragma kernel FinalizeGrid
 
 // --- Inputs ---
 StructuredBuffer<float3> Vertices;
@@ -14,6 +16,9 @@ SamplerState samplerMetaTexture;
 // The global voxel grid we are writing to
 RWTexture3D<float4> VoxelGrid;
 
+// Atomic accumulation buffer: 4 uints per voxel [R_fixed, G_fixed, B_fixed, Count]
+RWStructuredBuffer<uint> AccumBuffer;
+
 // Setup
 float4x4 LocalToWorld;
 float3 WorldBoundsMin;
@@ -22,7 +27,15 @@ int3 GridResolution;
 int IndexOffset;
 int TriangleCount;
 
+// Fixed-point scale (10 bits fractional precision)
+static const uint FP_SCALE = 1024;
+
 // --- Math Helpers ---
+
+int FlatIndex(int3 coord)
+{
+    return (coord.z * GridResolution.y * GridResolution.x + coord.y * GridResolution.x + coord.x) * 4;
+}
 
 // Simple AABB-Triangle overlap test (bounding box + plane check)
 // For small voxels this is accurate enough without full SAT
@@ -98,20 +111,54 @@ void VoxelizeMesh(uint3 id : SV_DispatchThreadID)
                 if (AABBIntersectsTriangle(voxelMin, voxelMax, v0, v1, v2))
                 {
                     // 4. Hit! Get Color from Meta Texture
-                    // Project voxel center onto triangle for barycentric UV
                     float3 bary = CalculateBarycentric(voxelCenter, v0, v1, v2);
                     float2 interpolatedUV = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
-
-                    // Sample the texture we baked via Meta Pass
                     float4 albedo = MetaTexture.SampleLevel(samplerMetaTexture, interpolatedUV, 0);
 
-                    // 5. Write to Grid
-                    // Race condition if multiple triangles hit same voxel — last write wins
-                    VoxelGrid[int3(x, y, z)] = albedo;
+                    // 5. Atomic accumulate — fixed-point InterlockedAdd avoids race conditions
+                    int base_idx = FlatIndex(int3(x, y, z));
+                    uint r_fixed = (uint)(saturate(albedo.r) * FP_SCALE);
+                    uint g_fixed = (uint)(saturate(albedo.g) * FP_SCALE);
+                    uint b_fixed = (uint)(saturate(albedo.b) * FP_SCALE);
+
+                    uint dummy;
+                    InterlockedAdd(AccumBuffer[base_idx + 0], r_fixed, dummy);
+                    InterlockedAdd(AccumBuffer[base_idx + 1], g_fixed, dummy);
+                    InterlockedAdd(AccumBuffer[base_idx + 2], b_fixed, dummy);
+                    InterlockedAdd(AccumBuffer[base_idx + 3], 1, dummy);
                 }
             }
         }
     }
+}
+
+// Finalize: average accumulated colors and write to the 3D texture
+[numthreads(8, 8, 8)]
+void FinalizeGrid(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= (uint3) GridResolution))
+        return;
+
+    int base_idx = FlatIndex(id);
+    uint count = AccumBuffer[base_idx + 3];
+    if (count == 0)
+        return;
+
+    float r = (float) AccumBuffer[base_idx + 0] / (FP_SCALE * count);
+    float g = (float) AccumBuffer[base_idx + 1] / (FP_SCALE * count);
+    float b = (float) AccumBuffer[base_idx + 2] / (FP_SCALE * count);
+
+    VoxelGrid[id] = float4(r, g, b, 1.0);
+}
+
+// Zero the accumulation buffer
+[numthreads(64, 1, 1)]
+void ClearAccum(uint3 id : SV_DispatchThreadID)
+{
+    uint totalEntries = (uint)(GridResolution.x * GridResolution.y * GridResolution.z) * 4;
+    if (id.x >= totalEntries)
+        return;
+    AccumBuffer[id.x] = 0;
 }
 
 [numthreads(8, 8, 8)]

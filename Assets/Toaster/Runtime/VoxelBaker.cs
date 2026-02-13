@@ -1,5 +1,8 @@
 using UnityEngine;
 using UnityEngine.Rendering;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 namespace Toaster
 {
@@ -21,6 +24,13 @@ namespace Toaster
         [Tooltip("Compute shader for GPU voxelization. Assign Voxelizer.compute.")]
         public ComputeShader voxelizerCompute;
 
+        [Header("Filtering")]
+        [Tooltip("Only voxelize objects with the ContributeGI static flag. Skips Toaster visualizers and non-static objects.")]
+        public bool requireContributeGI = true;
+
+        [Tooltip("Skip any renderer whose material uses a Toaster/* shader (fog volume, debug quads, etc).")]
+        public bool skipToasterShaders = true;
+
         [Header("Auto-Wire")]
         [Tooltip("After bake, automatically find all Toaster visualizer materials and point cloud renderers in the scene and wire them to the baked grid.")]
         public bool autoWireVisualizers = true;
@@ -29,15 +39,24 @@ namespace Toaster
         [Tooltip("Draw yellow wireframe of the bake volume in the Scene view.")]
         public bool drawGizmos = true;
 
-        // The Result
+        [Header("Serialization")]
+        [Tooltip("Save baked grid as a Texture3D asset. Survives domain reloads and scene saves.")]
+        public bool serializeAfterBake = true;
+
+        // The Result — runtime RT (lost on reload)
         [HideInInspector]
         public RenderTexture voxelGrid;
+
+        // Serialized result — persists across reloads
+        [Tooltip("Saved voxel grid asset. Auto-populated after bake if serializeAfterBake is enabled.")]
+        public Texture3D serializedGrid;
 
         // Buffers
         private ComputeBuffer vertBuffer;
         private ComputeBuffer normalBuffer;
         private ComputeBuffer uvBuffer;
         private ComputeBuffer indexBuffer;
+        private ComputeBuffer accumBuffer;
 
         private void OnDestroy()
         {
@@ -89,6 +108,16 @@ namespace Toaster
                 Mathf.CeilToInt(resY / 8f),
                 Mathf.CeilToInt(resZ / 8f));
 
+            // 2b. Create and clear atomic accumulation buffer (4 uints per voxel: R, G, B, Count)
+            int totalVoxels = resX * resY * resZ;
+            accumBuffer = new ComputeBuffer(totalVoxels * 4, sizeof(uint));
+
+            int clearAccumKernel = voxelizerCompute.FindKernel("ClearAccum");
+            voxelizerCompute.SetBuffer(clearAccumKernel, "AccumBuffer", accumBuffer);
+            voxelizerCompute.SetInts("GridResolution", resX, resY, resZ);
+            voxelizerCompute.Dispatch(clearAccumKernel,
+                Mathf.CeilToInt(totalVoxels * 4 / 64f), 1, 1);
+
             // 3. Setup Temp Meta Texture
             RenderTexture metaTempRT = RenderTexture.GetTemporary(256, 256, 0, RenderTextureFormat.ARGB32);
 
@@ -100,6 +129,7 @@ namespace Toaster
 
             int kernel = voxelizerCompute.FindKernel("VoxelizeMesh");
             voxelizerCompute.SetTexture(kernel, "VoxelGrid", voxelGrid);
+            voxelizerCompute.SetBuffer(kernel, "AccumBuffer", accumBuffer);
             voxelizerCompute.SetVector("WorldBoundsMin", worldMin);
             voxelizerCompute.SetFloat("VoxelSize", voxelSize);
             voxelizerCompute.SetInts("GridResolution", resX, resY, resZ);
@@ -111,6 +141,23 @@ namespace Toaster
             {
                 MeshFilter mf = rend.GetComponent<MeshFilter>();
                 if (mf == null || mf.sharedMesh == null) continue;
+
+                // --- Filtering ---
+                // Skip objects using Toaster shaders (fog volumes, debug visualizers)
+                if (skipToasterShaders && rend.sharedMaterial != null &&
+                    rend.sharedMaterial.shader != null &&
+                    rend.sharedMaterial.shader.name.StartsWith("Toaster/"))
+                    continue;
+
+#if UNITY_EDITOR
+                // Skip objects without ContributeGI static flag
+                if (requireContributeGI)
+                {
+                    var flags = GameObjectUtility.GetStaticEditorFlags(rend.gameObject);
+                    if ((flags & StaticEditorFlags.ContributeGI) == 0)
+                        continue;
+                }
+#endif
 
                 Mesh mesh = mf.sharedMesh;
 
@@ -133,9 +180,7 @@ namespace Toaster
                     }
 
                     // --- STEP A: Bake albedo/emission via Meta Pass ---
-                    // Fill with material base color as fallback — Unity primitives lack UV1
-                    // (lightmap UVs) so the Meta pass collapses vertices to (0,0).
-                    // For solid-color materials this gives the exact right result.
+                    // Fill with material base color as fallback for safety
                     Color baseColor = mat.HasColor("_BaseColor") ? mat.GetColor("_BaseColor") : Color.white;
 
                     cmd.Clear();
@@ -147,8 +192,25 @@ namespace Toaster
                     cmd.SetGlobalVector("unity_MetaFragmentControl", new Vector4(1, 0, 0, 0));
                     cmd.SetGlobalVector("unity_LightmapST", new Vector4(1, 1, 0, 0));
 
+                    // If mesh lacks UV1 (lightmap UVs), the Meta Pass collapses
+                    // vertices to (0,0). Temporarily inject UV1 = UV0 if the mesh
+                    // is writable; otherwise the _BaseColor fill serves as fallback.
+                    bool generatedUV1 = false;
+                    if ((mesh.uv2 == null || mesh.uv2.Length == 0) && mesh.isReadable)
+                    {
+                        if (mesh.uv != null && mesh.uv.Length > 0)
+                        {
+                            mesh.SetUVs(1, mesh.uv);
+                            generatedUV1 = true;
+                        }
+                    }
+
                     cmd.DrawRenderer(rend, mat, i, metaPass);
                     Graphics.ExecuteCommandBuffer(cmd);
+
+                    // Restore mesh — remove injected UV1
+                    if (generatedUV1)
+                        mesh.SetUVs(1, new System.Collections.Generic.List<Vector2>());
 
                     // --- STEP B: Voxelize on GPU ---
                     voxelizerCompute.SetTexture(kernel, "MetaTexture", metaTempRT);
@@ -171,10 +233,29 @@ namespace Toaster
             RenderTexture.ReleaseTemporary(metaTempRT);
             cmd.Release();
 
+            // 5. Finalize — average accumulated colors and write to voxel grid
+            int finalizeKernel = voxelizerCompute.FindKernel("FinalizeGrid");
+            voxelizerCompute.SetTexture(finalizeKernel, "VoxelGrid", voxelGrid);
+            voxelizerCompute.SetBuffer(finalizeKernel, "AccumBuffer", accumBuffer);
+            voxelizerCompute.SetInts("GridResolution", resX, resY, resZ);
+            voxelizerCompute.Dispatch(finalizeKernel,
+                Mathf.CeilToInt(resX / 8f),
+                Mathf.CeilToInt(resY / 8f),
+                Mathf.CeilToInt(resZ / 8f));
+
+            // Release accumulation buffer
+            if (accumBuffer != null) { accumBuffer.Release(); accumBuffer = null; }
+
             Appliance.Log($"Bake complete! {objectCount} objects, {triangleCount} triangles.");
 
             // Diagnostic: readback a slice to verify data was written
             VerifyGrid(resX, resY);
+
+            // Serialize to Texture3D asset
+#if UNITY_EDITOR
+            if (serializeAfterBake)
+                SerializeGrid(resX, resY, resZ);
+#endif
 
             // Auto-wire visualizers
             if (autoWireVisualizers)
@@ -238,7 +319,75 @@ namespace Toaster
             if (normalBuffer != null) { normalBuffer.Release(); normalBuffer = null; }
             if (uvBuffer != null) { uvBuffer.Release(); uvBuffer = null; }
             if (indexBuffer != null) { indexBuffer.Release(); indexBuffer = null; }
+            if (accumBuffer != null) { accumBuffer.Release(); accumBuffer = null; }
         }
+
+#if UNITY_EDITOR
+        void SerializeGrid(int resX, int resY, int resZ)
+        {
+            if (voxelGrid == null) return;
+
+            // Create Texture3D with matching format
+            var tex3D = new Texture3D(resX, resY, resZ, TextureFormat.RGBAHalf, false);
+            tex3D.filterMode = FilterMode.Bilinear;
+            tex3D.wrapMode = TextureWrapMode.Clamp;
+
+            // Read back slice by slice
+            var sliceRT = RenderTexture.GetTemporary(resX, resY, 0, RenderTextureFormat.ARGBHalf);
+            var prevActive = RenderTexture.active;
+            var readTex = new Texture2D(resX, resY, TextureFormat.RGBAHalf, false);
+
+            Color[] allPixels = new Color[resX * resY * resZ];
+
+            for (int z = 0; z < resZ; z++)
+            {
+                // Blit specific depth slice to 2D RT
+                // _VolumeTex_TexelSize.z gives us the depth, but we use a simple material-less blit
+                // with sourceDepthSlice parameter
+                Graphics.CopyTexture(voxelGrid, z, 0, sliceRT, 0, 0);
+                RenderTexture.active = sliceRT;
+                readTex.ReadPixels(new Rect(0, 0, resX, resY), 0, 0);
+                readTex.Apply();
+
+                var slicePixels = readTex.GetPixels();
+                System.Array.Copy(slicePixels, 0, allPixels, z * resX * resY, resX * resY);
+            }
+
+            RenderTexture.active = prevActive;
+            RenderTexture.ReleaseTemporary(sliceRT);
+            Object.DestroyImmediate(readTex);
+
+            tex3D.SetPixels(allPixels);
+            tex3D.Apply();
+
+            // Save as asset
+            string sceneName = gameObject.scene.name;
+            if (string.IsNullOrEmpty(sceneName)) sceneName = "Untitled";
+            string assetPath = $"Assets/Toaster/BakedGrids/{sceneName}_{gameObject.name}_VoxelGrid.asset";
+
+            // Ensure directory exists
+            string dir = System.IO.Path.GetDirectoryName(assetPath);
+            if (!System.IO.Directory.Exists(dir))
+                System.IO.Directory.CreateDirectory(dir);
+
+            // Replace existing or create new
+            var existing = AssetDatabase.LoadAssetAtPath<Texture3D>(assetPath);
+            if (existing != null)
+            {
+                EditorUtility.CopySerialized(tex3D, existing);
+                Object.DestroyImmediate(tex3D);
+                serializedGrid = existing;
+            }
+            else
+            {
+                AssetDatabase.CreateAsset(tex3D, assetPath);
+                serializedGrid = tex3D;
+            }
+
+            AssetDatabase.SaveAssets();
+            Appliance.Log($"Voxel grid serialized to: {assetPath}");
+        }
+#endif
 
         void ApplyBrowningPreset()
         {
@@ -256,10 +405,21 @@ namespace Toaster
         /// Finds all Toaster visualizer materials and point cloud renderers in the scene
         /// and wires them to this baker's voxel grid.
         /// </summary>
+        /// <summary>
+        /// Returns the best available texture: runtime RT if it exists, otherwise serialized Texture3D.
+        /// </summary>
+        public Texture GetActiveGrid()
+        {
+            if (voxelGrid != null) return voxelGrid;
+            if (serializedGrid != null) return serializedGrid;
+            return null;
+        }
+
         [ContextMenu("Wire Visualizers")]
         public void WireVisualizers()
         {
-            if (voxelGrid == null)
+            var grid = GetActiveGrid();
+            if (grid == null)
             {
                 Appliance.LogWarning("No voxel grid to wire — bake first.");
                 return;
@@ -274,12 +434,11 @@ namespace Toaster
                 var mat = rend.sharedMaterial;
                 if (mat == null || mat.shader == null) continue;
 
-                // Match any shader in the Toaster/ namespace
                 if (mat.shader.name.StartsWith("Toaster/"))
                 {
                     if (mat.HasTexture("_VolumeTex"))
                     {
-                        mat.SetTexture("_VolumeTex", voxelGrid);
+                        mat.SetTexture("_VolumeTex", grid);
                         wiredCount++;
                     }
                 }
@@ -293,7 +452,7 @@ namespace Toaster
                 wiredCount++;
             }
 
-            Appliance.Log($"Auto-wired {wiredCount} visualizer(s) to voxel grid.");
+            Appliance.Log($"Auto-wired {wiredCount} visualizer(s) to {(voxelGrid != null ? "RenderTexture" : "serialized Texture3D")}.");
         }
 
         private void OnDrawGizmos()
