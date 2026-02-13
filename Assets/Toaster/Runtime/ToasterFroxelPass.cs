@@ -304,6 +304,12 @@ namespace Toaster
             if (m_BlueNoise != null)
                 cmd.SetComputeTextureParam(cs, m_InjectKernel, "_BlueNoise", m_BlueNoise);
 
+            // Toggle temporal reprojection keyword on compute shader
+            if (m_Settings.enableTemporal)
+                cs.EnableKeyword("TEMPORAL_REPROJECTION");
+            else
+                cs.DisableKeyword("TEMPORAL_REPROJECTION");
+
             // 1. Clear
             cmd.SetComputeTextureParam(cs, m_ClearKernel, "FroxelScattering", scatteringRT);
             cmd.DispatchCompute(cs, m_ClearKernel,
@@ -620,6 +626,12 @@ namespace Toaster
 
             if (data.blueNoise != null)
                 cmd.SetComputeTextureParam(cs, data.injectKernel, "_BlueNoise", data.blueNoise);
+
+            // Toggle temporal reprojection keyword on compute shader
+            if (data.enableTemporal)
+                cs.EnableKeyword("TEMPORAL_REPROJECTION");
+            else
+                cs.DisableKeyword("TEMPORAL_REPROJECTION");
 
             // Use RTHandle.rt for texture binding (not TextureHandle)
             RenderTexture scatRT = data.scatteringRT.rt;

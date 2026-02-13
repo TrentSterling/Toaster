@@ -248,14 +248,27 @@ namespace Toaster
                     EditorGUILayout.EndHorizontal();
                 }
 
-                // Quick settings
+                // Quick settings — edit directly without navigating to renderer asset
                 EditorGUILayout.Space(4);
-                var so = new SerializedObject(rendererData);
-                so.Update();
+                EditorGUILayout.LabelField("Quick Settings", EditorStyles.miniLabel);
 
-                // Find the feature in the serialized renderer features list and draw its settings
-                // (User can also select the renderer asset to see full inspector)
-                if (GUILayout.Button("Select Renderer Asset"))
+                EditorGUI.BeginChangeCheck();
+                var s = froxelFeature.settings;
+
+                s.fogDensity = EditorGUILayout.Slider("Fog Density", s.fogDensity, 0f, 1f);
+                s.fogIntensity = EditorGUILayout.Slider("Fog Intensity", s.fogIntensity, 0f, 10f);
+                s.ambientColor = EditorGUILayout.ColorField("Ambient Color", s.ambientColor);
+                s.scatterAnisotropy = EditorGUILayout.Slider("Scatter Anisotropy", s.scatterAnisotropy, -0.99f, 0.99f);
+                s.maxDistance = EditorGUILayout.Slider("Max Distance", s.maxDistance, 10f, 500f);
+                s.enableTemporal = EditorGUILayout.Toggle("Temporal Reprojection", s.enableTemporal);
+                if (s.enableTemporal)
+                    s.temporalBlendAlpha = EditorGUILayout.Slider("  Blend Alpha", s.temporalBlendAlpha, 0.01f, 1f);
+
+                if (EditorGUI.EndChangeCheck())
+                    EditorUtility.SetDirty(froxelFeature);
+
+                EditorGUILayout.Space(4);
+                if (GUILayout.Button("Select Renderer Asset (all settings)"))
                     Selection.activeObject = rendererData;
             }
             else

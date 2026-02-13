@@ -46,10 +46,10 @@ namespace Toaster
             public float scatterAnisotropy = 0.3f;
 
             [Header("Temporal")]
-            [Tooltip("Enable temporal reprojection for smoother fog.")]
-            public bool enableTemporal = false;
+            [Tooltip("Enable temporal reprojection for smoother fog. Strongly recommended.")]
+            public bool enableTemporal = true;
 
-            [Tooltip("Temporal blend weight. Lower = more history (smoother but ghostier).")]
+            [Tooltip("Temporal blend weight. Lower = more history (smoother but ghostier). 0.05 = 95% history.")]
             [Range(0.01f, 1f)]
             public float temporalBlendAlpha = 0.05f;
         }
