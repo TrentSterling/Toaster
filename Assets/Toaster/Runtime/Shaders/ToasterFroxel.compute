@@ -168,46 +168,57 @@ float HenyeyGreenstein(float cosTheta, float g)
     return (1.0 - g2) / (4.0 * 3.14159265 * pow(abs(denom), 1.5));
 }
 
+// Max distance to march shadow rays for directional lights
+#define DIRECTIONAL_SHADOW_DIST 50.0
+
 // Evaluate a single scene light at a world position (with voxel occlusion)
 float3 EvaluateLight(LightGPUData light, float3 worldPos, float3 viewDir)
 {
     int lightType = (int)light.typeAndFlags.x;
-
-    // Skip directional lights — their contribution is already in the baked grid
-    // (the path tracer traces shadow rays from sun, so baked color includes sunlight)
-    if (lightType == 2)
-        return float3(0, 0, 0);
-
     float3 lightColor = light.colorAndIntensity.rgb * light.colorAndIntensity.w;
 
-    float3 delta = light.positionAndRange.xyz - worldPos;
-    float dist = length(delta);
-    float range = light.positionAndRange.w;
+    float3 toLight;
+    float attenuation = 1.0;
+    float shadowDist;
 
-    if (dist >= range) return float3(0, 0, 0);
-
-    float3 toLight = delta / max(dist, 0.001);
-
-    // Smooth distance attenuation (URP style)
-    float distNorm = dist / range;
-    float distNorm2 = distNorm * distNorm;
-    float falloff = saturate(1.0 - distNorm2 * distNorm2);
-    float attenuation = (falloff * falloff) / max(dist * dist, 0.0001);
-
-    // Spot cone attenuation
-    if (lightType == 1)
+    if (lightType == 2) // Directional
     {
-        float cosOuter = light.directionAndAngle.w;
-        float cosInner = light.typeAndFlags.y;
-        float cosAngle = dot(-toLight, light.directionAndAngle.xyz);
-        attenuation *= saturate((cosAngle - cosOuter) / max(cosInner - cosOuter, 0.001));
+        toLight = -light.directionAndAngle.xyz;
+        shadowDist = DIRECTIONAL_SHADOW_DIST;
+        // No distance attenuation for directional
+    }
+    else // Point or Spot
+    {
+        float3 delta = light.positionAndRange.xyz - worldPos;
+        float dist = length(delta);
+        float range = light.positionAndRange.w;
+
+        if (dist >= range) return float3(0, 0, 0);
+
+        toLight = delta / max(dist, 0.001);
+        shadowDist = dist;
+
+        // Smooth distance attenuation (URP style)
+        float distNorm = dist / range;
+        float distNorm2 = distNorm * distNorm;
+        float falloff = saturate(1.0 - distNorm2 * distNorm2);
+        attenuation = (falloff * falloff) / max(dist * dist, 0.0001);
+
+        // Spot cone attenuation
+        if (lightType == 1)
+        {
+            float cosOuter = light.directionAndAngle.w;
+            float cosInner = light.typeAndFlags.y;
+            float cosAngle = dot(-toLight, light.directionAndAngle.xyz);
+            attenuation *= saturate((cosAngle - cosOuter) / max(cosInner - cosOuter, 0.001));
+        }
     }
 
     // Early out before expensive shadow march
     if (attenuation < 0.001) return float3(0, 0, 0);
 
     // Voxel shadow ray — march through baked geometry toward the light
-    float shadow = MarchVoxelShadow(worldPos, toLight, dist);
+    float shadow = MarchVoxelShadow(worldPos, toLight, shadowDist);
 
     // Phase function — how much light scatters toward the camera
     float cosTheta = dot(toLight, viewDir);

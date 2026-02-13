@@ -658,6 +658,15 @@ namespace Toaster
         {
             const string SponzaFBXPath = "Packages/com.unity.sponza-urp/Meshes/Sponza_Modular.FBX";
 
+            // Enable Read/Write on the FBX so VoxelBaker can access mesh data
+            var importer = AssetImporter.GetAtPath(SponzaFBXPath) as ModelImporter;
+            if (importer != null && !importer.isReadable)
+            {
+                Appliance.Log("Enabling Read/Write on Sponza FBX for voxelization...");
+                importer.isReadable = true;
+                importer.SaveAndReimport();
+            }
+
             var sponzaPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(SponzaFBXPath);
             if (sponzaPrefab == null)
             {
