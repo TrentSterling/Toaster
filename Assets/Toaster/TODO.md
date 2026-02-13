@@ -1,7 +1,7 @@
 # Toaster TODO
 
-## Current Status: v1.0 (Crumb)
-Working: Full pipeline — Material bake (Meta Pass + emission) + GPU voxelization + path tracer + volume raymarcher + 6 debug visualizers + editor window + Shader Graph integration + froxel volumetric fog with direct scene lighting + multi-volume blending + froxel debug views.
+## Current Status: v1.1 (Crumb)
+Working: Full pipeline — Material bake (Meta Pass + emission) + GPU voxelization + path tracer + volume raymarcher + 6 debug visualizers + editor window + Shader Graph integration + froxel volumetric fog with direct scene lighting + multi-volume blending + froxel debug views + remapped density model + light-localized fog halos + height fog.
 
 ---
 
@@ -46,13 +46,25 @@ Working: Full pipeline — Material bake (Meta Pass + emission) + GPU voxelizati
 
 ---
 
+## Completed (v1.0 → v1.1)
+
+### Critical Fixes
+- [x] Fog density model remap — fogDensity slider (0-1) now means "optical depth at max distance" instead of raw extinction. Converts via `extinction = fogDensity * 3.0 / maxDistance`. Fixes 100% opaque fog at default settings.
+- [x] Light-localized density boost — fog thickens near point/spot lights for glow halos. Uses URP distance attenuation + spot cone mask, weighted by intensity.
+- [x] Height fog — Y-based density falloff with sqrt curve (thicker at ground, thinner above).
+- [x] Edge falloff range widened — 0-1 (was 0-0.5), default 0.2 (was 0.1).
+- [x] Diagnostic logging — re-logs when volume count changes instead of once.
+- [x] Editor window grouped controls — Density / Lighting / Height / Temporal / Debug sections.
+
+---
+
 ## v1.0 Sprint — Polish + Quality
 
 ### Critical (must work before calling it done)
 - [x] Temporal keyword toggle — enable/disable TEMPORAL_REPROJECTION multi_compile at runtime
 
 ### Froxel Quality
-- [ ] Height fog falloff — remap world Y between base/max height with sqrt density curve
+- [x] Height fog falloff — remap world Y between base/max height with sqrt density curve
 - [x] Froxel debug visualizer — 5 modes (off/scattering/extinction/transmittance/depth slices) in apply shader
 - [ ] Exposure/tonemapping on fog — HDR fog values can blow out, need soft clamp
 - [ ] Shadow rays for scene lights in fog — occlude light contribution behind solid geometry

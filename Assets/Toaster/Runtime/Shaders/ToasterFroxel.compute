@@ -49,6 +49,10 @@ SamplerState sampler_linear_clamp;
 float _FogDensity;
 float _FogIntensity;
 float4 _AmbientFogColor;
+float _LightDensityBoost;
+int _EnableHeightFog;
+float _HeightFogBase;
+float _HeightFogTop;
 
 // ============================================================
 // Scene lights
@@ -194,6 +198,45 @@ void InjectMedia(uint3 id : SV_DispatchThreadID)
     // View direction from camera to froxel (for phase function)
     float3 viewDir = normalize(worldPos - _CameraPos);
 
+    // Evaluate scene lights ONCE per froxel (not per-volume — avoids double-counting in overlap)
+    float3 directLight = EvaluateSceneLights(worldPos, viewDir);
+
+    // Compute light-localized density boost ONCE per froxel
+    float lightBoost = 0.0;
+    if (_LightDensityBoost > 0.0)
+    {
+        for (int i = 0; i < _LightCount; i++)
+        {
+            LightGPUData light = _LightDataBuffer[i];
+            int lightType = (int)light.typeAndFlags.x;
+
+            if (lightType == 2) // Directional — no localized density
+                continue;
+
+            float3 delta = light.positionAndRange.xyz - worldPos;
+            float dist = length(delta);
+            float range = light.positionAndRange.w;
+            if (dist >= range) continue;
+
+            float distNorm = dist / range;
+            float distNorm2 = distNorm * distNorm;
+            float atten = saturate(1.0 - distNorm2 * distNorm2);
+            atten *= atten;
+
+            // Spot cone mask
+            if (lightType == 1)
+            {
+                float cosOuter = light.directionAndAngle.w;
+                float cosInner = light.typeAndFlags.y;
+                float3 toLight = delta / max(dist, 0.001);
+                float cosAngle = dot(-toLight, light.directionAndAngle.xyz);
+                atten *= saturate((cosAngle - cosOuter) / max(cosInner - cosOuter, 0.001));
+            }
+
+            lightBoost += atten * light.colorAndIntensity.w; // weight by intensity
+        }
+    }
+
     // Accumulate scattering and extinction from all volumes
     float3 scattering = float3(0, 0, 0);
     float extinction = 0.0;
@@ -218,20 +261,32 @@ void InjectMedia(uint3 id : SV_DispatchThreadID)
         // Uniform fog density — exists everywhere in the volume (like real atmosphere)
         float baseDensity = vol.settings.x * _FogDensity * edgeFade;
 
+        // Height fog — density ramps down with altitude
+        if (_EnableHeightFog)
+        {
+            float t = saturate((worldPos.y - _HeightFogBase) / max(_HeightFogTop - _HeightFogBase, 0.01));
+            baseDensity *= 1.0 - sqrt(t); // sqrt falloff — denser at bottom
+        }
+
         // Sample baked lighting for the in-scattered light color
         int gridIdx = (int)vol.settings.z;
         float4 voxelData = SampleVolumeGrid(gridIdx, uvw);
 
         // Fog color = (baked light + ambient) scaled by intensity
-        float3 lightColor = (voxelData.rgb + _AmbientFogColor.rgb)
+        float3 bakedColor = (voxelData.rgb + _AmbientFogColor.rgb)
                           * vol.settings.y * _FogIntensity;
 
-        // Add direct scene light contribution (evaluated per-froxel with phase function)
-        float3 directLight = EvaluateSceneLights(worldPos, viewDir);
-        lightColor += directLight;
-
-        scattering += lightColor * baseDensity;
+        // Baked lighting + scene lights contribute to this volume's density
+        scattering += (bakedColor + directLight) * baseDensity;
         extinction += baseDensity;
+    }
+
+    // Light-localized density boost: applied once on top of total volume density
+    if (lightBoost > 0.0 && extinction > 0.0)
+    {
+        float boostExtinction = lightBoost * _LightDensityBoost * _FogDensity;
+        extinction += boostExtinction;
+        scattering += directLight * boostExtinction;
     }
 
     float4 result = float4(scattering, extinction);

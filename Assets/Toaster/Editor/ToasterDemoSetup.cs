@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 
@@ -287,6 +288,8 @@ namespace Toaster
                 fogVolumeGO.GetComponent<MeshRenderer>().sharedMaterial = volumeMat;
             var toasterVol = fogVolumeGO.AddComponent<ToasterVolume>();
             toasterVol.baker = baker;
+            toasterVol.densityMultiplier = 3f;
+            toasterVol.intensityMultiplier = 2f;
             toasterVol.edgeFalloff = 0.15f;
             GameObjectUtility.SetStaticEditorFlags(fogVolumeGO, 0);
 
@@ -326,6 +329,8 @@ namespace Toaster
                 fogVolume2GO.GetComponent<MeshRenderer>().sharedMaterial = volumeMat2;
             var toasterVol2 = fogVolume2GO.AddComponent<ToasterVolume>();
             toasterVol2.baker = baker2;
+            toasterVol2.densityMultiplier = 2f;
+            toasterVol2.intensityMultiplier = 2f;
             toasterVol2.edgeFalloff = 0.15f;
             GameObjectUtility.SetStaticEditorFlags(fogVolume2GO, 0);
 
@@ -455,6 +460,7 @@ namespace Toaster
                     }
                 }
 
+                ConfigureFroxelFeature();
                 Appliance.Log("Demo scene created with 2 volumes, baked, and traced! Visualizers wired.");
             }
             else
@@ -507,6 +513,50 @@ namespace Toaster
             mat.name = name;
             mat.SetColor("_BaseColor", color);
             return mat;
+        }
+
+        private static void ConfigureFroxelFeature()
+        {
+            var pipeline = GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset;
+            if (pipeline == null)
+                return;
+
+            var pipeType = pipeline.GetType();
+            var rendererListField = pipeType.GetField("m_RendererDataList",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (rendererListField == null)
+                return;
+
+            var rendererList = rendererListField.GetValue(pipeline) as ScriptableRendererData[];
+            if (rendererList == null || rendererList.Length == 0)
+                return;
+
+            var rendererData = rendererList[0];
+            ToasterFroxelFeature froxelFeature = null;
+            foreach (var feature in rendererData.rendererFeatures)
+            {
+                if (feature is ToasterFroxelFeature f)
+                {
+                    froxelFeature = f;
+                    break;
+                }
+            }
+
+            if (froxelFeature == null)
+            {
+                Appliance.Log("No ToasterFroxelFeature on renderer — skipping froxel config. Add it via Toaster > Baker Window.");
+                return;
+            }
+
+            froxelFeature.settings.fogDensity = 0.03f;
+            froxelFeature.settings.fogIntensity = 1.5f;
+            froxelFeature.settings.lightDensityBoost = 0.8f;
+            froxelFeature.settings.maxDistance = 200f;
+            froxelFeature.settings.scatterAnisotropy = 0.3f;
+
+            EditorUtility.SetDirty(froxelFeature);
+            AssetDatabase.SaveAssets();
+            Appliance.Log("Configured froxel feature for demo scene (density=0.03, intensity=1.5, lightBoost=0.8).");
         }
 
         private static Material CreateEmissiveMaterial(Shader shader, string name, Color baseColor, Color emissionColor)

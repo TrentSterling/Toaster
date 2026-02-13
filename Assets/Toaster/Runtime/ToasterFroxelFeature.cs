@@ -23,7 +23,7 @@ namespace Toaster
             public Vector3Int froxelResolution = new Vector3Int(160, 90, 128);
 
             [Header("Depth")]
-            [Tooltip("Maximum fog distance from camera.")]
+            [Tooltip("How far the froxel grid extends from the camera (meters). Larger = covers more scene but less depth precision per slice.")]
             public float maxDistance = 200f;
 
             [Tooltip("Near plane for froxel grid (should match camera near).")]
@@ -34,15 +34,15 @@ namespace Toaster
             public float depthUniformity = 0.5f;
 
             [Header("Fog")]
-            [Tooltip("Base fog density. Controls how thick the fog medium is.")]
-            [Range(0f, 1f)]
+            [Tooltip("Extinction coefficient — fog absorption per meter. 0.01 = subtle haze, 0.05 = thick fog.")]
+            [Range(0f, 0.2f)]
             public float fogDensity = 0.03f;
 
-            [Tooltip("How strongly baked light colors the fog.")]
+            [Tooltip("Brightness multiplier for baked light color in fog. Higher = more colorful fog, lower = subtle tint.")]
             [Range(0f, 10f)]
             public float fogIntensity = 1f;
 
-            [Tooltip("Ambient fog color — provides base haze even in unlit areas.")]
+            [Tooltip("Base haze color added in unlit areas. Prevents pure-black fog in shadowed regions.")]
             public Color ambientColor = new Color(0.02f, 0.02f, 0.04f, 1f);
 
             [Header("Lighting")]
@@ -53,6 +53,21 @@ namespace Toaster
             [Tooltip("Scattering anisotropy (Henyey-Greenstein g). 0 = isotropic, >0 = forward scatter, <0 = back scatter.")]
             [Range(-0.99f, 0.99f)]
             public float scatterAnisotropy = 0.3f;
+
+            [Header("Light Fog")]
+            [Tooltip("Extra fog density near point/spot lights, creating visible glow halos. Weighted by light intensity and distance attenuation.")]
+            [Range(0f, 5f)]
+            public float lightDensityBoost = 0.5f;
+
+            [Header("Height Fog")]
+            [Tooltip("Enable Y-based density falloff (thicker at ground level).")]
+            public bool enableHeightFog = false;
+
+            [Tooltip("World Y below which fog is at full density.")]
+            public float heightFogBase = 0f;
+
+            [Tooltip("World Y above which fog is zero density.")]
+            public float heightFogTop = 20f;
 
             [Header("Temporal")]
             [Tooltip("Enable temporal reprojection for smoother fog. Strongly recommended.")]

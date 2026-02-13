@@ -255,17 +255,78 @@ namespace Toaster
                 EditorGUI.BeginChangeCheck();
                 var s = froxelFeature.settings;
 
-                s.fogDensity = EditorGUILayout.Slider("Fog Density", s.fogDensity, 0f, 1f);
-                s.fogIntensity = EditorGUILayout.Slider("Fog Intensity", s.fogIntensity, 0f, 10f);
-                s.ambientColor = EditorGUILayout.ColorField("Ambient Color", s.ambientColor);
-                s.scatterAnisotropy = EditorGUILayout.Slider("Scatter Anisotropy", s.scatterAnisotropy, -0.99f, 0.99f);
-                s.maxDistance = EditorGUILayout.Slider("Max Distance", s.maxDistance, 10f, 500f);
-                s.enableTemporal = EditorGUILayout.Toggle("Temporal Reprojection", s.enableTemporal);
-                if (s.enableTemporal)
-                    s.temporalBlendAlpha = EditorGUILayout.Slider("  Blend Alpha", s.temporalBlendAlpha, 0.01f, 1f);
+                // Fog Density
+                EditorGUILayout.LabelField("Fog Density", EditorStyles.miniBoldLabel);
+                s.fogDensity = EditorGUILayout.Slider(
+                    new GUIContent("Fog Density", "Extinction coefficient (absorption per meter). 0.01 = subtle haze, 0.05 = thick fog. Multiplied by each volume's densityMultiplier."),
+                    s.fogDensity, 0f, 0.2f);
+                s.fogIntensity = EditorGUILayout.Slider(
+                    new GUIContent("Intensity", "Brightness multiplier for baked light color in fog. Higher = more colorful fog."),
+                    s.fogIntensity, 0f, 10f);
+                s.ambientColor = EditorGUILayout.ColorField(
+                    new GUIContent("Ambient Color", "Base haze color in unlit areas. Added to baked lighting before intensity scaling."),
+                    s.ambientColor);
+                s.maxDistance = EditorGUILayout.Slider(
+                    new GUIContent("Max Distance", "How far the froxel grid extends from the camera (meters). Larger = covers more scene but less depth precision."),
+                    s.maxDistance, 10f, 500f);
+
+                // Show computed opacity for quick reference
+                if (s.fogDensity > 0)
+                {
+                    float opacity20m = 1f - Mathf.Exp(-s.fogDensity * 20f);
+                    float opacity50m = 1f - Mathf.Exp(-s.fogDensity * 50f);
+                    EditorGUILayout.HelpBox(
+                        $"At density {s.fogDensity:F3}: {opacity20m * 100:F0}% opaque at 20m, {opacity50m * 100:F0}% at 50m (before volume multipliers)",
+                        MessageType.None);
+                }
 
                 EditorGUILayout.Space(2);
-                s.debugMode = (ToasterFroxelFeature.DebugMode)EditorGUILayout.EnumPopup("Debug View", s.debugMode);
+
+                // Lighting
+                EditorGUILayout.LabelField("Lighting", EditorStyles.miniBoldLabel);
+                s.scatterAnisotropy = EditorGUILayout.Slider(
+                    new GUIContent("Scatter Anisotropy", "Henyey-Greenstein phase function. 0 = uniform scatter, +0.3 = forward scatter (light beams visible), -0.3 = back scatter (glow around lights)."),
+                    s.scatterAnisotropy, -0.99f, 0.99f);
+                s.lightDensityBoost = EditorGUILayout.Slider(
+                    new GUIContent("Light Density Boost", "Extra fog density near point/spot lights. Creates glowing halos. 0 = no boost, 1+ = visible halos."),
+                    s.lightDensityBoost, 0f, 5f);
+
+                EditorGUILayout.Space(2);
+
+                // Height Fog
+                EditorGUILayout.LabelField("Height Fog", EditorStyles.miniBoldLabel);
+                s.enableHeightFog = EditorGUILayout.Toggle(
+                    new GUIContent("Enable Height Fog", "Density falls off with altitude. Thicker at ground level, fading above."),
+                    s.enableHeightFog);
+                EditorGUI.BeginDisabledGroup(!s.enableHeightFog);
+                s.heightFogBase = EditorGUILayout.FloatField(
+                    new GUIContent("Base Y", "World Y below which fog is at full density."),
+                    s.heightFogBase);
+                s.heightFogTop = EditorGUILayout.FloatField(
+                    new GUIContent("Top Y", "World Y above which fog is zero density. Uses sqrt falloff between base and top."),
+                    s.heightFogTop);
+                EditorGUI.EndDisabledGroup();
+
+                EditorGUILayout.Space(2);
+
+                // Temporal
+                EditorGUILayout.LabelField("Temporal", EditorStyles.miniBoldLabel);
+                s.enableTemporal = EditorGUILayout.Toggle(
+                    new GUIContent("Temporal Reprojection", "Blend with previous frame for smoother fog. Strongly recommended — reduces noise and banding."),
+                    s.enableTemporal);
+                EditorGUI.BeginDisabledGroup(!s.enableTemporal);
+                s.temporalBlendAlpha = EditorGUILayout.Slider(
+                    new GUIContent("  Blend Alpha", "How much of the current frame to blend in. Lower = smoother but ghostier. 0.05 = 95% history."),
+                    s.temporalBlendAlpha, 0.01f, 1f);
+                EditorGUI.EndDisabledGroup();
+
+                EditorGUILayout.Space(2);
+
+                // Debug
+                EditorGUILayout.LabelField("Debug", EditorStyles.miniBoldLabel);
+                s.debugMode = (ToasterFroxelFeature.DebugMode)EditorGUILayout.EnumPopup(
+                    new GUIContent("Debug View", "Scattering = raw in-scattered light, Extinction = density field, Transmittance = opacity gradient, DepthSlices = froxel grid depth bands."),
+                    s.debugMode);
 
                 if (EditorGUI.EndChangeCheck())
                     EditorUtility.SetDirty(froxelFeature);

@@ -20,17 +20,17 @@ namespace Toaster
         public bool autoMatchBounds = true;
 
         [Header("Froxel Fog")]
-        [Tooltip("Density multiplier for froxel fog injection.")]
+        [Tooltip("Multiplied with global Fog Density to get this volume's extinction. At 3x with density=0.03, corridor gets 88% opacity over 24m.")]
         [Range(0f, 10f)]
         public float densityMultiplier = 1f;
 
-        [Tooltip("Intensity multiplier for froxel fog color.")]
+        [Tooltip("Multiplied with global Fog Intensity to scale baked light color in this volume. Higher = more colorful fog.")]
         [Range(0f, 10f)]
         public float intensityMultiplier = 1f;
 
-        [Tooltip("Edge falloff distance (0-1 in volume UVW). Fades density near volume boundaries for smooth overlap.")]
-        [Range(0f, 0.5f)]
-        public float edgeFalloff = 0.1f;
+        [Tooltip("Fades density near volume edges (0-1 in UVW space). Prevents hard fog cutoffs where volumes meet. 0.15 = gentle fade, 0.5 = wide blend.")]
+        [Range(0f, 1f)]
+        public float edgeFalloff = 0.2f;
 
         MeshRenderer meshRenderer;
         MaterialPropertyBlock propertyBlock;

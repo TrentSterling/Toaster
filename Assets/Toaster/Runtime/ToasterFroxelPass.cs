@@ -81,6 +81,10 @@ namespace Toaster
         static readonly int s_FroxelTex = Shader.PropertyToID("_FroxelTex");
         static readonly int s_FroxelScatterTex = Shader.PropertyToID("_FroxelScatterTex");
         static readonly int s_FroxelDebugMode = Shader.PropertyToID("_FroxelDebugMode");
+        static readonly int s_LightDensityBoost = Shader.PropertyToID("_LightDensityBoost");
+        static readonly int s_EnableHeightFog = Shader.PropertyToID("_EnableHeightFog");
+        static readonly int s_HeightFogBase = Shader.PropertyToID("_HeightFogBase");
+        static readonly int s_HeightFogTop = Shader.PropertyToID("_HeightFogTop");
 
         static readonly string[] s_VolumeGridNames = new string[]
         {
@@ -132,7 +136,7 @@ namespace Toaster
             m_HistoryBuffer = null;
         }
 
-        static bool s_LoggedDiagnostic;
+        int m_LastLoggedVolumeCount = -1;
 
         void CollectVolumeData()
         {
@@ -184,17 +188,33 @@ namespace Toaster
                 gridIndex++;
             }
 
-            // One-time diagnostic
-            if (!s_LoggedDiagnostic)
+            // Log when volume count changes
+            if (m_VolumeDataList.Count != m_LastLoggedVolumeCount)
             {
-                s_LoggedDiagnostic = true;
+                m_LastLoggedVolumeCount = m_VolumeDataList.Count;
                 int total = ToasterVolume.ActiveVolumes.Count;
                 if (m_VolumeDataList.Count == 0)
+                {
                     Appliance.LogWarning($"Froxel: {total} volume(s) found but 0 have valid grids. " +
                         $"({skippedNoBaker} missing baker, {skippedNoGrid} missing grid texture). " +
                         "Bake voxels first, or check serializedGrid on baker.");
+                }
                 else
+                {
                     Appliance.Log($"Froxel: injecting {m_VolumeDataList.Count} volume(s) into froxel grid.");
+                    for (int i = 0; i < m_VolumeDataList.Count; i++)
+                    {
+                        var d = m_VolumeDataList[i];
+                        var g = m_VolumeGrids[i];
+                        Appliance.Log($"  Volume[{i}]: grid={g.name} ({g.GetType().Name} {g.width}x{g.height}), " +
+                            $"bounds=({d.boundsMin.x:F1},{d.boundsMin.y:F1},{d.boundsMin.z:F1})-" +
+                            $"({d.boundsMax.x:F1},{d.boundsMax.y:F1},{d.boundsMax.z:F1}), " +
+                            $"density={d.settings.x:F2}, intensity={d.settings.y:F2}, gridIdx={d.settings.z:F0}");
+                    }
+                }
+
+                if (skippedNoBaker > 0 || skippedNoGrid > 0)
+                    Appliance.LogWarning($"Froxel: skipped {skippedNoBaker} (no baker) + {skippedNoGrid} (no grid).");
             }
         }
 
@@ -302,6 +322,10 @@ namespace Toaster
             cmd.SetComputeVectorParam(cs, s_CameraPos, cameraPos);
             cmd.SetComputeVectorParam(cs, s_CamForward, camForward);
             cmd.SetComputeFloatParam(cs, s_ScatterAnisotropy, m_Settings.scatterAnisotropy);
+            cmd.SetComputeFloatParam(cs, s_LightDensityBoost, m_Settings.lightDensityBoost);
+            cmd.SetComputeIntParam(cs, s_EnableHeightFog, m_Settings.enableHeightFog ? 1 : 0);
+            cmd.SetComputeFloatParam(cs, s_HeightFogBase, m_Settings.heightFogBase);
+            cmd.SetComputeFloatParam(cs, s_HeightFogTop, m_Settings.heightFogTop);
 
             if (m_BlueNoise != null)
                 cmd.SetComputeTextureParam(cs, m_InjectKernel, "_BlueNoise", m_BlueNoise);
@@ -634,6 +658,10 @@ namespace Toaster
             cmd.SetComputeVectorParam(cs, s_CameraPos, data.cameraPos);
             cmd.SetComputeVectorParam(cs, s_CamForward, data.camForward);
             cmd.SetComputeFloatParam(cs, s_ScatterAnisotropy, data.settings.scatterAnisotropy);
+            cmd.SetComputeFloatParam(cs, s_LightDensityBoost, data.settings.lightDensityBoost);
+            cmd.SetComputeIntParam(cs, s_EnableHeightFog, data.settings.enableHeightFog ? 1 : 0);
+            cmd.SetComputeFloatParam(cs, s_HeightFogBase, data.settings.heightFogBase);
+            cmd.SetComputeFloatParam(cs, s_HeightFogTop, data.settings.heightFogTop);
 
             if (data.blueNoise != null)
                 cmd.SetComputeTextureParam(cs, data.injectKernel, "_BlueNoise", data.blueNoise);
