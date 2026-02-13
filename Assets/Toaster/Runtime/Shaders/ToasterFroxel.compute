@@ -197,26 +197,25 @@ void InjectMedia(uint3 id : SV_DispatchThreadID)
             baseDensity *= 1.0 - sqrt(t); // sqrt falloff — denser at bottom
         }
 
-        // Sample baked lighting grid at two mip levels:
-        // - Mip 1 for light color: smooths out voxel boundaries (fog is naturally diffuse)
-        // - Mip 0 for occupancy: sharper wall detection
+        // Sample baked lighting grid
         int gridIdx = (int)vol.settings.z;
-        float3 bakedLight = SampleVolumeGrid(gridIdx, uvw, 1).rgb; // smooth color
-        float occupancy = SampleVolumeGrid(gridIdx, uvw, 0).a;     // sharp walls
+        float4 voxelData = SampleVolumeGrid(gridIdx, uvw, 0);
 
         // Smooth wall transition — smoothstep avoids hard blocky edges from
         // binary threshold while still creating opaque barriers through solid geometry.
         // alpha < 0.3 = clear air, alpha > 0.8 = solid wall, gradual blend between.
-        float wallDensity = smoothstep(0.3, 0.8, occupancy);
+        float wallDensity = smoothstep(0.3, 0.8, voxelData.a);
 
         // Fog color = (baked light + ambient) scaled by intensity
-        float3 bakedColor = (bakedLight + _AmbientFogColor.rgb)
+        float3 bakedColor = (voxelData.rgb + _AmbientFogColor.rgb)
                           * vol.settings.y * _FogIntensity;
 
-        // Wall extinction: solid regions absorb all transmittance (opaque barrier)
-        // Soft transition prevents blocky voxel edges in the fog
+        // Scattering and extinction both fade at wall boundaries:
+        // - wallDensity=0 (air): full scattering, normal fog extinction
+        // - wallDensity=1 (solid): zero scattering, high extinction (opaque barrier)
+        // Both must fade together or wall edges glow (bright scatter + partial extinction)
         float wallExtinction = wallDensity * 20.0;
-        scattering += bakedColor * baseDensity * _ScatteringAlbedo;
+        scattering += bakedColor * baseDensity * (1.0 - wallDensity) * _ScatteringAlbedo;
         extinction += baseDensity + wallExtinction;
     }
 
