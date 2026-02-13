@@ -75,19 +75,19 @@ int _LightCount;
 // Helpers
 // ============================================================
 
-float4 SampleVolumeGrid(int gridIndex, float3 uvw)
+float4 SampleVolumeGrid(int gridIndex, float3 uvw, float mip)
 {
     // Switch-case dispatch — HLSL can't index Texture3D arrays
     switch (gridIndex)
     {
-        case 0: return VolumeGrid0.SampleLevel(sampler_linear_clamp, uvw, 0);
-        case 1: return VolumeGrid1.SampleLevel(sampler_linear_clamp, uvw, 0);
-        case 2: return VolumeGrid2.SampleLevel(sampler_linear_clamp, uvw, 0);
-        case 3: return VolumeGrid3.SampleLevel(sampler_linear_clamp, uvw, 0);
-        case 4: return VolumeGrid4.SampleLevel(sampler_linear_clamp, uvw, 0);
-        case 5: return VolumeGrid5.SampleLevel(sampler_linear_clamp, uvw, 0);
-        case 6: return VolumeGrid6.SampleLevel(sampler_linear_clamp, uvw, 0);
-        case 7: return VolumeGrid7.SampleLevel(sampler_linear_clamp, uvw, 0);
+        case 0: return VolumeGrid0.SampleLevel(sampler_linear_clamp, uvw, mip);
+        case 1: return VolumeGrid1.SampleLevel(sampler_linear_clamp, uvw, mip);
+        case 2: return VolumeGrid2.SampleLevel(sampler_linear_clamp, uvw, mip);
+        case 3: return VolumeGrid3.SampleLevel(sampler_linear_clamp, uvw, mip);
+        case 4: return VolumeGrid4.SampleLevel(sampler_linear_clamp, uvw, mip);
+        case 5: return VolumeGrid5.SampleLevel(sampler_linear_clamp, uvw, mip);
+        case 6: return VolumeGrid6.SampleLevel(sampler_linear_clamp, uvw, mip);
+        case 7: return VolumeGrid7.SampleLevel(sampler_linear_clamp, uvw, mip);
         default: return float4(0, 0, 0, 0);
     }
 }
@@ -197,24 +197,25 @@ void InjectMedia(uint3 id : SV_DispatchThreadID)
             baseDensity *= 1.0 - sqrt(t); // sqrt falloff — denser at bottom
         }
 
-        // Sample baked lighting grid — rgb = traced light, a = voxel occupancy
+        // Sample baked lighting grid at two mip levels:
+        // - Mip 1 for light color: smooths out voxel boundaries (fog is naturally diffuse)
+        // - Mip 0 for occupancy: sharper wall detection
         int gridIdx = (int)vol.settings.z;
-        float4 voxelData = SampleVolumeGrid(gridIdx, uvw);
+        float3 bakedLight = SampleVolumeGrid(gridIdx, uvw, 1).rgb; // smooth color
+        float occupancy = SampleVolumeGrid(gridIdx, uvw, 0).a;     // sharp walls
 
-        // Threshold occupancy to binary — trilinear filtering smears alpha between
-        // solid (1.0) and empty (0.0), creating partial values near walls that would
-        // add unwanted extinction in open air and dim lights near geometry.
-        float wall = step(0.5, voxelData.a); // 1 = solid, 0 = air
+        // Smooth wall transition — smoothstep avoids hard blocky edges from
+        // binary threshold while still creating opaque barriers through solid geometry.
+        // alpha < 0.3 = clear air, alpha > 0.8 = solid wall, gradual blend between.
+        float wallDensity = smoothstep(0.3, 0.8, occupancy);
 
         // Fog color = (baked light + ambient) scaled by intensity
-        float3 bakedColor = (voxelData.rgb + _AmbientFogColor.rgb)
+        float3 bakedColor = (bakedLight + _AmbientFogColor.rgb)
                           * vol.settings.y * _FogIntensity;
 
-        // Solid voxels: high extinction (opaque barrier in Beer-Lambert)
-        // Empty voxels: normal fog density with baked light color at full brightness
-        // Wall extinction blocks fog behind geometry; scattering is NOT dimmed by
-        // occupancy since the wall barrier already handles occlusion.
-        float wallExtinction = wall * 100.0;
+        // Wall extinction: solid regions absorb all transmittance (opaque barrier)
+        // Soft transition prevents blocky voxel edges in the fog
+        float wallExtinction = wallDensity * 20.0;
         scattering += bakedColor * baseDensity * _ScatteringAlbedo;
         extinction += baseDensity + wallExtinction;
     }
