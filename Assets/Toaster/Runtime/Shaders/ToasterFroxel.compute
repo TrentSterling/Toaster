@@ -71,9 +71,9 @@ StructuredBuffer<LightGPUData> _LightDataBuffer;
 int _LightCount;
 float _ScatterAnisotropy; // Henyey-Greenstein g parameter (-1..1)
 
-// Max shadow ray steps — higher = more accurate but slower
-// 32 steps is enough for most scenes (each step = ~1 voxel width)
-#define SHADOW_MAX_STEPS 32
+// Max shadow ray steps — must be high enough that step size < voxel width
+// For a 16m min-axis volume: 16/128 = 0.125m steps (well under typical 0.5m voxels)
+#define SHADOW_MAX_STEPS 128
 #define SHADOW_DENSITY_THRESHOLD 0.5 // accumulated density for full occlusion
 
 // ============================================================
@@ -132,8 +132,10 @@ float MarchVoxelShadow(float3 worldPos, float3 toLightDir, float maxDist)
 
         if (tEntry >= tExit) continue; // ray misses this volume
 
-        // Step size — roughly 1 voxel width in UVW space
-        float stepWorld = max(max(volSize.x, volSize.y), volSize.z) / (float)SHADOW_MAX_STEPS;
+        // Step size — distribute steps evenly across ray segment through volume
+        // e.g. 10m ray / 128 steps = 0.078m — well under typical 0.5m voxels
+        float rayLen = tExit - tEntry;
+        float stepWorld = rayLen / (float)SHADOW_MAX_STEPS;
         float t = tEntry + stepWorld * 0.5; // half-step offset to avoid self-shadow
 
         for (int s = 0; s < SHADOW_MAX_STEPS; s++)

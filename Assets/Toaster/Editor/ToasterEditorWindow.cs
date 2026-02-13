@@ -66,6 +66,10 @@ namespace Toaster
             GUILayout.Label($"Toaster {Appliance.Version}", EditorStyles.boldLabel);
             EditorGUILayout.Space(4);
 
+            // Auto-find baker if reference was lost (e.g. after scene change)
+            if (selectedBaker == null)
+                FindBaker();
+
             // Baker selection
             selectedBaker = (VoxelBaker)EditorGUILayout.ObjectField(
                 "Baker", selectedBaker, typeof(VoxelBaker), true);

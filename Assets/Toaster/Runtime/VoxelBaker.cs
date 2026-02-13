@@ -210,7 +210,6 @@ namespace Toaster
                 }
 
                 eligible.Add((rend, mesh));
-                Appliance.Log($"  Eligible: '{rend.name}' mesh='{mesh.name}' verts={mesh.vertexCount} tris={mesh.triangles.Length / 3} submeshes={mesh.subMeshCount} readable={mesh.isReadable}");
             }
 
             Appliance.Log($"Filter: {eligible.Count} eligible, {skipNoMesh} no mesh, {skipToaster} toaster shader, {skipGI} no ContributeGI, {skipIncremental} unchanged (incremental) — out of {renderers.Length} total.");
