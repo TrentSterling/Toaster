@@ -33,19 +33,28 @@ Written as: `LightingGrid[id] = float4(AccumulatedLight.rgb, VoxelDensity);`
 
 ## Key Files
 
-- `Assets/Toaster/Runtime/Toaster.cs` — Namespace root (`namespace Toaster`), static `Appliance` class, version info, `BrowningLevel` enum, utility logging
-- `Assets/Toaster/Runtime/VoxelBaker.cs` — C# orchestrator: sets up voxel grid (3D RenderTexture), iterates renderers/submeshes, executes Meta Pass via CommandBuffer, dispatches compute. `[ContextMenu("Bake Voxels")]`
-- `Assets/Toaster/Runtime/Shaders/Voxelizer.compute` — HLSL compute shader: `VoxelizeMesh` kernel (triangle-box intersection, barycentric UV interpolation, voxel grid writes) + `ClearGrid` kernel
-- `Assets/Toaster/Runtime/Shaders/ToasterVolume.shader` — URP volumetric fog raymarcher. Ray-box intersection → front-to-back compositing. Blend One OneMinusSrcAlpha, Cull Front, ZWrite Off
-- `Assets/Toaster/Runtime/Shaders/ToasterDebugSlice.shader` — Debug shader: renders a flat 2D Z-slice of the 3D voxel texture on a quad
-- `Assets/Toaster/Runtime/Shaders/ToasterDebugHeatmap.shader` — False-color heatmap with channel isolation and grid overlay
-- `Assets/Toaster/Runtime/Shaders/ToasterDebugIsosurface.shader` — Raymarched solid surfaces with gradient-estimated normals and lighting
-- `Assets/Toaster/Runtime/Shaders/ToasterDebugMultiSlice.shader` — Hologram-style multi-slice Y-plane visualizer with animation
-- `Assets/Toaster/Runtime/Shaders/ToasterDebugPointCloud.shader` — Billboard per occupied voxel, driven by VoxelPointCloudRenderer.cs
-- `Assets/Toaster/Runtime/VoxelPointCloudRenderer.cs` — Component to configure point cloud shader properties from baker results
-- `Assets/Toaster/Editor/ToasterDemoSetup.cs` — Editor menu items: "Toaster > Create Demo Scene" and "Toaster > Create Demo Scene & Bake". Auto-creates camera, lights, test geometry, baker, all visualizers
+### Core Pipeline
+- `Assets/Toaster/Runtime/Toaster.cs` — Namespace root, static `Appliance` class, version `0.6 (Crumb)`, `BrowningLevel` enum, utility logging
+- `Assets/Toaster/Runtime/VoxelBaker.cs` — C# orchestrator: voxel grid setup, Meta Pass via CommandBuffer, compute dispatch, auto-wire visualizers, auto-fit bounds, serialization, incremental bake, buffer pooling
+- `Assets/Toaster/Runtime/Shaders/Voxelizer.compute` — Kernels: `VoxelizeMesh` (SAT triangle-box, atomic accum), `ClearGrid`, `ClearAccum`, `FinalizeGrid`
+- `Assets/Toaster/Runtime/ToasterTracer.cs` — Path tracer orchestrator: gathers scene lights, uploads GPU buffers, dispatches trace
+- `Assets/Toaster/Runtime/Shaders/ToasterTracer.compute` — Kernels: `TraceLight` (Halton sampling, DDA march, multi-bounce, shadow rays), `ClearLighting`
+
+### Shaders
+- `Assets/Toaster/Runtime/Shaders/ToasterVolume.shader` — URP volumetric fog raymarcher with optional _LightingTex toggle and additive blend
+- `Assets/Toaster/Runtime/Shaders/ToasterDebugSlice.shader` — Z-slice debug quad
+- `Assets/Toaster/Runtime/Shaders/ToasterDebugHeatmap.shader` — False-color heatmap with channel isolation
+- `Assets/Toaster/Runtime/Shaders/ToasterDebugIsosurface.shader` — Raymarched surfaces with gradient normals
+- `Assets/Toaster/Runtime/Shaders/ToasterDebugMultiSlice.shader` — Hologram-style Y-plane slices
+- `Assets/Toaster/Runtime/Shaders/ToasterDebugPointCloud.shader` — Procedural billboard point cloud
+- `Assets/Toaster/Runtime/Shaders/ToasterSample.hlsl` — Shader Graph Custom Function include (ToasterSampleVolume, ToasterSampleLighting, ToasterSampleFog)
+
+### Components & Editor
+- `Assets/Toaster/Runtime/VoxelPointCloudRenderer.cs` — Graphics.DrawProcedural point cloud renderer
+- `Assets/Toaster/Editor/ToasterDemoSetup.cs` — "Toaster > Create Demo Scene" and "Toaster > Create Demo Scene && Bake" menu items
+- `Assets/Toaster/Editor/ToasterEditorWindow.cs` — "Toaster > Baker Window" — bake/trace buttons, grid stats, auto-fit, preview
 - `Assets/Toaster/TODO.md` — Project roadmap and task tracking
-- `Assets/Toaster/FUTURE.md` — Advanced techniques research (brickmaps, radiance cascades, VXGI, SVO, etc.)
+- `Assets/Toaster/FUTURE.md` — Advanced techniques research
 
 ## Tech Stack
 
@@ -57,7 +66,7 @@ Written as: `LightingGrid[id] = float4(AccumulatedLight.rgb, VoxelDensity);`
 ## Conventions
 
 - Namespace: `Toaster`
-- Version: `0.1 (Crumb)`
+- Version: `0.6 (Crumb)`
 - Browning levels: Raw (low res), Light (med res), Burnt (high res)
 - Log prefix: `[TOASTER]`
 
@@ -65,10 +74,10 @@ Written as: `LightingGrid[id] = float4(AccumulatedLight.rgb, VoxelDensity);`
 
 - Meshes need UVs (preferably UV2/lightmap UVs for non-overlapping coverage)
 - Materials need a Meta Pass (Standard, URP Lit, HDRP Lit have this built-in; custom Shader Graphs need lightmap static enabled)
-- The AABB intersection test is simplified (no full SAT); works well with small voxels
-- Race conditions on voxel writes (multiple triangles hitting same voxel) are accepted — last write wins
+- Full SAT (Separating Axis Theorem) triangle-box intersection test (13 axes) since v0.4
+- Atomic accumulation buffer (InterlockedAdd) eliminates race conditions on voxel writes since v0.3
 - UV interpolation in compute shader uses barycentric projection of voxel center onto triangle plane
-- Buffer management is per-object (recreated each iteration). Production optimization: one giant buffer or pooling
+- Buffer pooling (EnsureBuffer pattern) reuses ComputeBuffers across objects since v0.6
 - Voxel grid visualization requires a custom raymarcher shader — Gizmos can only show the bounding box
 - The "Submesh Dispatch" method: CPU finds Meta pass index, CommandBuffer renders to temp texture, Compute dispatches per-triangle and samples that texture
 - Rejected approaches: Gemini suggested slicing the scene (produced "8 slices of sourdough bread"); Jobs + Physics.CheckSphere considered but too slow and hard to get UV/color data back to CPU
