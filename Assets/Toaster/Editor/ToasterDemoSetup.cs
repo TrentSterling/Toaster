@@ -29,6 +29,12 @@ namespace Toaster
             SetupScene(bakeImmediately: true);
         }
 
+        [MenuItem("Toaster/Create Demo Scene 2 && Bake")]
+        public static void CreateDemoScene2AndBake()
+        {
+            SetupScene2();
+        }
+
         private static void SetupScene(bool bakeImmediately)
         {
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
@@ -513,6 +519,170 @@ namespace Toaster
             mat.name = name;
             mat.SetColor("_BaseColor", color);
             return mat;
+        }
+
+        // ============================================================
+        // Demo Scene 2 — Froxel fog isolation test
+        // Single volume, camera inside, tight maxDistance, no legacy mesh
+        // ============================================================
+
+        private static void SetupScene2()
+        {
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+
+            Shader urpLit = Shader.Find("Universal Render Pipeline/Lit");
+            if (urpLit == null) urpLit = Shader.Find("Standard");
+
+            // ============================================================
+            // Camera — INSIDE the volume, looking down the room
+            // ============================================================
+            var cameraGO = new GameObject("Main Camera");
+            cameraGO.tag = "MainCamera";
+            var cam = cameraGO.AddComponent<Camera>();
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = Color.black;
+            cam.nearClipPlane = 0.3f;
+            cam.farClipPlane = 100f;
+            cameraGO.transform.position = new Vector3(0, 2, -6);
+            cameraGO.transform.rotation = Quaternion.Euler(5, 0, 0);
+            cameraGO.AddComponent<UniversalAdditionalCameraData>();
+
+            // ============================================================
+            // Room — simple enclosed box, all surfaces visible
+            // ============================================================
+            var darkMat = CreateMaterial(urpLit, "Dark_Mat", new Color(0.1f, 0.1f, 0.12f));
+            var lightMat = CreateMaterial(urpLit, "Light_Mat", new Color(0.3f, 0.28f, 0.25f));
+
+            // Floor
+            CreatePrimitive("Floor", PrimitiveType.Plane, Vector3.zero, new Vector3(2, 1, 2), darkMat);
+            // Ceiling
+            CreatePrimitive("Ceiling", PrimitiveType.Cube, new Vector3(0, 6, 0), new Vector3(20, 0.2f, 20), darkMat);
+            // Walls
+            CreatePrimitive("Wall Back", PrimitiveType.Cube, new Vector3(0, 3, 10), new Vector3(20, 6, 0.3f), lightMat);
+            CreatePrimitive("Wall Left", PrimitiveType.Cube, new Vector3(-10, 3, 0), new Vector3(0.3f, 6, 20), lightMat);
+            CreatePrimitive("Wall Right", PrimitiveType.Cube, new Vector3(10, 3, 0), new Vector3(0.3f, 6, 20), lightMat);
+
+            // A few objects for occlusion/color
+            CreatePrimitive("Pillar 1", PrimitiveType.Cylinder, new Vector3(-3, 2.5f, 3), new Vector3(1, 2.5f, 1), lightMat);
+            CreatePrimitive("Pillar 2", PrimitiveType.Cylinder, new Vector3(3, 2.5f, 3), new Vector3(1, 2.5f, 1), lightMat);
+            CreatePrimitive("Box", PrimitiveType.Cube, new Vector3(0, 0.75f, 5), new Vector3(1.5f, 1.5f, 1.5f), lightMat);
+
+            // ============================================================
+            // Emissives — bright colored panels to bleed into fog
+            // ============================================================
+            var redEmissive = CreateEmissiveMaterial(urpLit, "RedGlow", Color.black, new Color(6f, 0.3f, 0.1f));
+            var blueEmissive = CreateEmissiveMaterial(urpLit, "BlueGlow", Color.black, new Color(0.1f, 0.4f, 6f));
+            var greenEmissive = CreateEmissiveMaterial(urpLit, "GreenGlow", Color.black, new Color(0.2f, 5f, 0.3f));
+
+            CreatePrimitive("Emissive Red", PrimitiveType.Cube, new Vector3(-9.8f, 2, 0), new Vector3(0.05f, 1, 6), redEmissive);
+            CreatePrimitive("Emissive Blue", PrimitiveType.Cube, new Vector3(9.8f, 2, 0), new Vector3(0.05f, 1, 6), blueEmissive);
+            CreatePrimitive("Emissive Green", PrimitiveType.Cube, new Vector3(0, 0.02f, 4), new Vector3(3, 0.02f, 0.3f), greenEmissive);
+
+            // ============================================================
+            // Lights — big, bright, obvious fog sources
+            // ============================================================
+            // No directional — just point lights so fog color is obvious
+            CreatePointLight("Red Light", new Vector3(-5, 3, 0), new Color(1, 0.2f, 0.05f), 15f, 8f);
+            CreatePointLight("Blue Light", new Vector3(5, 3, 0), new Color(0.1f, 0.3f, 1f), 15f, 8f);
+            CreatePointLight("Warm Center", new Vector3(0, 4, 3), new Color(1, 0.8f, 0.5f), 20f, 6f);
+            CreatePointLight("Green Floor", new Vector3(0, 0.5f, 4), new Color(0.2f, 1, 0.3f), 8f, 4f);
+
+            // ============================================================
+            // Single volume — covers the whole room
+            // ============================================================
+            var computeShader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            var tracerCompute = AssetDatabase.LoadAssetAtPath<ComputeShader>(TracerComputePath);
+
+            var bakerGO = new GameObject("Toaster Baker");
+            var baker = bakerGO.AddComponent<VoxelBaker>();
+            baker.boundsSize = new Vector3(20, 6, 20);
+            baker.voxelSize = 0.25f;
+            bakerGO.transform.position = new Vector3(0, 3, 0);
+            if (computeShader != null)
+                baker.voxelizerCompute = computeShader;
+
+            var tracer = bakerGO.AddComponent<ToasterTracer>();
+            tracer.baker = baker;
+            tracer.raysPerVoxel = 64;
+            tracer.maxBounces = 3;
+            if (tracerCompute != null)
+                tracer.tracerCompute = tracerCompute;
+
+            // Fog volume — cube with renderer DISABLED so only froxel pipeline renders fog
+            var fogVolumeGO = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            fogVolumeGO.name = "Fog Volume (froxel only)";
+            fogVolumeGO.transform.position = bakerGO.transform.position;
+            fogVolumeGO.transform.localScale = baker.boundsSize;
+            Object.DestroyImmediate(fogVolumeGO.GetComponent<BoxCollider>());
+            fogVolumeGO.GetComponent<MeshRenderer>().enabled = false; // No legacy mesh fog
+            var toasterVol = fogVolumeGO.AddComponent<ToasterVolume>();
+            toasterVol.baker = baker;
+            toasterVol.densityMultiplier = 2f;
+            toasterVol.intensityMultiplier = 2f;
+            toasterVol.edgeFalloff = 0.1f;
+            toasterVol.autoMatchBounds = false;
+            GameObjectUtility.SetStaticEditorFlags(fogVolumeGO, 0);
+
+            // ============================================================
+            // Bake + Trace
+            // ============================================================
+            baker.Bake();
+            if (baker.voxelGrid != null && tracer.tracerCompute != null)
+            {
+                tracer.Trace();
+            }
+
+            // Configure froxel feature with TIGHT maxDistance
+            ConfigureFroxelForScene2();
+
+            Appliance.Log("Demo Scene 2 created. Single volume, camera inside, maxDistance=50. Froxel-only (no legacy mesh).");
+
+            if (SceneView.lastActiveSceneView != null)
+            {
+                SceneView.lastActiveSceneView.LookAt(new Vector3(0, 3, 0), Quaternion.Euler(25, -20, 0), 18f);
+            }
+        }
+
+        private static void ConfigureFroxelForScene2()
+        {
+            var pipeline = GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset;
+            if (pipeline == null) return;
+
+            var pipeType = pipeline.GetType();
+            var rendererListField = pipeType.GetField("m_RendererDataList",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (rendererListField == null) return;
+
+            var rendererList = rendererListField.GetValue(pipeline) as ScriptableRendererData[];
+            if (rendererList == null || rendererList.Length == 0) return;
+
+            var rendererData = rendererList[0];
+            ToasterFroxelFeature froxelFeature = null;
+            foreach (var feature in rendererData.rendererFeatures)
+            {
+                if (feature is ToasterFroxelFeature f) { froxelFeature = f; break; }
+            }
+
+            if (froxelFeature == null)
+            {
+                Appliance.Log("No ToasterFroxelFeature on renderer — add via Toaster > Baker Window.");
+                return;
+            }
+
+            // KEY: tight maxDistance — volumes are within 20m, no need for 200m
+            froxelFeature.settings.fogDensity = 0.05f;
+            froxelFeature.settings.fogIntensity = 2f;
+            froxelFeature.settings.lightDensityBoost = 1f;
+            froxelFeature.settings.maxDistance = 50f;
+            froxelFeature.settings.scatterAnisotropy = 0.3f;
+            froxelFeature.settings.enableHeightFog = false;
+            froxelFeature.settings.enableTemporal = true;
+            froxelFeature.settings.temporalBlendAlpha = 0.05f;
+            froxelFeature.settings.debugMode = ToasterFroxelFeature.DebugMode.Off;
+
+            EditorUtility.SetDirty(froxelFeature);
+            AssetDatabase.SaveAssets();
+            Appliance.Log($"Froxel configured: density=0.05, intensity=2, maxDist=50, lightBoost=1");
         }
 
         private static void ConfigureFroxelFeature()

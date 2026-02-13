@@ -34,7 +34,7 @@ Written as: `LightingGrid[id] = float4(AccumulatedLight.rgb, VoxelDensity);`
 ## Key Files
 
 ### Core Pipeline
-- `Assets/Toaster/Runtime/Toaster.cs` — Namespace root, static `Appliance` class, version `1.1 (Crumb)`, `BrowningLevel` enum, utility logging
+- `Assets/Toaster/Runtime/Toaster.cs` — Namespace root, static `Appliance` class, version `1.2 (Crumb)`, `BrowningLevel` enum, utility logging
 - `Assets/Toaster/Runtime/VoxelBaker.cs` — C# orchestrator: voxel grid setup, Meta Pass via CommandBuffer, compute dispatch, auto-wire visualizers, auto-fit bounds, serialization, incremental bake, buffer pooling
 - `Assets/Toaster/Runtime/Shaders/Voxelizer.compute` — Kernels: `VoxelizeMesh` (SAT triangle-box, atomic accum), `ClearGrid`, `ClearAccum`, `FinalizeGrid`
 - `Assets/Toaster/Runtime/ToasterTracer.cs` — Path tracer orchestrator: gathers scene lights, uploads GPU buffers, dispatches trace
@@ -75,7 +75,7 @@ Written as: `LightingGrid[id] = float4(AccumulatedLight.rgb, VoxelDensity);`
 ## Conventions
 
 - Namespace: `Toaster`
-- Version: `1.1 (Crumb)`
+- Version: `1.2 (Crumb)`
 - Browning levels: Raw (low res), Light (med res), Burnt (high res)
 - Log prefix: `[TOASTER]`
 
