@@ -143,6 +143,12 @@ Shader "Toaster/FroxelApply"
                     return half4(debugColor, 0.0);
                 }
 
+                // Smooth fade at far edge — prevents hard cutoff at maxDistance
+                // Fade over last 15% of range: full fog at 85%, zero at 100%
+                float farFade = saturate((_FroxelFar - linearDepth) / (_FroxelFar * 0.15));
+                fog.rgb *= farFade;
+                fog.a = lerp(1.0, fog.a, farFade); // transmittance → 1.0 (clear) at far edge
+
                 // fog.rgb = accumulated in-scattered light
                 // fog.a = remaining transmittance
                 // Blend: dst = fog.rgb + scene.rgb * fog.a

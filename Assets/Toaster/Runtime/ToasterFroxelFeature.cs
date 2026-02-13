@@ -34,20 +34,20 @@ namespace Toaster
             public float depthUniformity = 0.5f;
 
             [Header("Fog")]
-            [Tooltip("Extinction coefficient — fog absorption per meter. 0.01 = subtle haze, 0.05 = thick fog.")]
+            [Tooltip("Extinction coefficient — fog absorption per meter. Controls opacity. 0.005 = light haze, 0.02 = medium, 0.05 = thick.")]
             [Range(0f, 0.2f)]
-            public float fogDensity = 0.03f;
+            public float fogDensity = 0.015f;
 
-            [Tooltip("Brightness multiplier for baked light color in fog. Higher = more colorful fog, lower = subtle tint.")]
+            [Tooltip("Brightness multiplier for baked light color in fog. 0 = lights-only mode (no baked tint). Higher = more colorful fog from baked data.")]
             [Range(0f, 10f)]
             public float fogIntensity = 1f;
 
-            [Tooltip("Scattering albedo — multiplies scattering brightness without changing opacity. >1 = brighter fog, <1 = dimmer. Physically 1.0, but higher values make thin fog visible.")]
+            [Tooltip("Scattering albedo — multiplies fog brightness without changing opacity. >1 = brighter light halos at same density. 3 is a good starting point.")]
             [Range(0f, 10f)]
             public float scatteringAlbedo = 3f;
 
-            [Tooltip("Base haze color added everywhere in fog. Higher = more visible fog in unlit areas. RGB (0.1-0.2) gives a subtle atmospheric haze.")]
-            public Color ambientColor = new Color(0.12f, 0.12f, 0.18f, 1f);
+            [Tooltip("Base haze color added everywhere in fog. Subtle values (0.05-0.1) give atmospheric depth. Too high = washed out.")]
+            public Color ambientColor = new Color(0.08f, 0.08f, 0.12f, 1f);
 
             [Header("Lighting")]
             [Tooltip("Maximum number of scene lights to evaluate per froxel.")]
@@ -59,9 +59,9 @@ namespace Toaster
             public float scatterAnisotropy = 0.3f;
 
             [Header("Light Fog")]
-            [Tooltip("Extra fog density near point/spot lights, creating visible glow halos. Weighted by light intensity and distance attenuation.")]
+            [Tooltip("Extra fog density near point/spot lights, creating visible glow halos. Weighted by light intensity and distance attenuation. 1-2 = visible halos.")]
             [Range(0f, 5f)]
-            public float lightDensityBoost = 0.5f;
+            public float lightDensityBoost = 1.5f;
 
             [Header("Height Fog")]
             [Tooltip("Enable Y-based density falloff (thicker at ground level).")]
@@ -77,9 +77,9 @@ namespace Toaster
             [Tooltip("Enable temporal reprojection for smoother fog. Strongly recommended.")]
             public bool enableTemporal = true;
 
-            [Tooltip("Temporal blend weight. Lower = more history (smoother but ghostier). 0.05 = 95% history.")]
+            [Tooltip("Temporal blend weight — how much of the current frame to use. Low (0.05) = smooth but ghosty when camera moves. High (0.3-0.5) = responsive, less ghosting. 0.2 = balanced default.")]
             [Range(0.01f, 1f)]
-            public float temporalBlendAlpha = 0.05f;
+            public float temporalBlendAlpha = 0.2f;
 
             [Header("Debug")]
             [Tooltip("Debug visualization mode. Off = normal fog compositing.")]

@@ -669,23 +669,23 @@ namespace Toaster
                 return;
             }
 
-            // KEY: tight maxDistance — volumes are within 20m, no need for 200m
-            froxelFeature.settings.fogDensity = 0.05f;
-            froxelFeature.settings.fogIntensity = 2f;
+            // Tight maxDistance (volumes within 20m), lights-forward approach
+            froxelFeature.settings.fogDensity = 0.015f;
+            froxelFeature.settings.fogIntensity = 1f;
             froxelFeature.settings.scatteringAlbedo = 3f;
-            froxelFeature.settings.ambientColor = new Color(0.12f, 0.12f, 0.18f, 1f);
-            froxelFeature.settings.lightDensityBoost = 1f;
+            froxelFeature.settings.ambientColor = new Color(0.08f, 0.08f, 0.12f, 1f);
+            froxelFeature.settings.lightDensityBoost = 1.5f;
             froxelFeature.settings.maxDistance = 50f;
             froxelFeature.settings.scatterAnisotropy = 0.3f;
             froxelFeature.settings.enableHeightFog = false;
             froxelFeature.settings.enableTemporal = true;
-            froxelFeature.settings.temporalBlendAlpha = 0.05f;
+            froxelFeature.settings.temporalBlendAlpha = 0.2f;
             froxelFeature.settings.debugMode = ToasterFroxelFeature.DebugMode.Off;
 
             EditorUtility.SetDirty(froxelFeature);
             EditorUtility.SetDirty(rendererData);
             AssetDatabase.SaveAssets();
-            Appliance.Log($"Froxel configured: density=0.05, intensity=2, albedo=3, ambient=(0.12,0.12,0.18), maxDist=50");
+            Appliance.Log($"Froxel configured: density=0.015, intensity=1, albedo=3, lightBoost=1.5, blend=0.2, maxDist=50");
         }
 
         private static void ConfigureFroxelFeature()
@@ -721,17 +721,18 @@ namespace Toaster
                 return;
             }
 
-            froxelFeature.settings.fogDensity = 0.03f;
-            froxelFeature.settings.fogIntensity = 1.5f;
+            froxelFeature.settings.fogDensity = 0.015f;
+            froxelFeature.settings.fogIntensity = 1f;
             froxelFeature.settings.scatteringAlbedo = 3f;
-            froxelFeature.settings.ambientColor = new Color(0.12f, 0.12f, 0.18f, 1f);
-            froxelFeature.settings.lightDensityBoost = 0.8f;
-            froxelFeature.settings.maxDistance = 200f;
+            froxelFeature.settings.ambientColor = new Color(0.08f, 0.08f, 0.12f, 1f);
+            froxelFeature.settings.lightDensityBoost = 1.5f;
+            froxelFeature.settings.maxDistance = 100f;
             froxelFeature.settings.scatterAnisotropy = 0.3f;
+            froxelFeature.settings.temporalBlendAlpha = 0.2f;
 
             EditorUtility.SetDirty(froxelFeature);
             AssetDatabase.SaveAssets();
-            Appliance.Log("Configured froxel feature for demo scene (density=0.03, intensity=1.5, albedo=3, lightBoost=0.8).");
+            Appliance.Log("Configured froxel feature for demo scene (density=0.015, intensity=1, albedo=3, lightBoost=1.5, blend=0.2).");
         }
 
         private static Material CreateEmissiveMaterial(Shader shader, string name, Color baseColor, Color emissionColor)
