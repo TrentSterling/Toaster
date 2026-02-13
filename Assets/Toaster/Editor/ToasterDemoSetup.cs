@@ -195,6 +195,21 @@ namespace Toaster
                 multiSliceGO.GetComponent<MeshRenderer>().sharedMaterial = multiSliceMat;
             GameObjectUtility.SetStaticEditorFlags(multiSliceGO, 0);
 
+            // --- Point Cloud Renderer (procedural — no mesh needed) ---
+            Material pointCloudMat = null;
+            var pointCloudShader = AssetDatabase.LoadAssetAtPath<Shader>(PointCloudShaderPath);
+            if (pointCloudShader != null)
+            {
+                pointCloudMat = new Material(pointCloudShader);
+                pointCloudMat.name = "ToasterPointCloud_Mat";
+            }
+
+            var pointCloudGO = new GameObject("Debug Point Cloud");
+            var pcRenderer = pointCloudGO.AddComponent<VoxelPointCloudRenderer>();
+            if (pointCloudMat != null)
+                pcRenderer.pointCloudMaterial = pointCloudMat;
+            GameObjectUtility.SetStaticEditorFlags(pointCloudGO, 0);
+
             // --- Bake if requested ---
             if (bakeImmediately)
             {
@@ -209,6 +224,9 @@ namespace Toaster
                         if (m != null)
                             m.SetTexture("_VolumeTex", baker.voxelGrid);
                     }
+
+                    // Wire point cloud renderer
+                    pcRenderer.ConfigureFromBaker(baker);
 
                     Appliance.Log("Demo scene created and baked! Visualizers wired.");
                 }

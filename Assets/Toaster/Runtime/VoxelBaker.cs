@@ -6,15 +6,31 @@ namespace Toaster
     [ExecuteAlways]
     public class VoxelBaker : MonoBehaviour
     {
+        [Header("Preset")]
+        [Tooltip("Quick quality preset. Applies voxel size on Bake. Set to Raw for fast iteration, Burnt for final quality.")]
+        public Appliance.BrowningLevel browningLevel = Appliance.BrowningLevel.Light;
+
         [Header("Settings")]
+        [Tooltip("Size of each voxel in world units. Smaller = higher quality, more memory. Overridden by Browning Level on bake.")]
+        [Range(0.05f, 2.0f)]
         public float voxelSize = 0.25f;
+
+        [Tooltip("World-space size of the voxel grid bounding box.")]
         public Vector3 boundsSize = new Vector3(12, 8, 12);
+
+        [Tooltip("Compute shader for GPU voxelization. Assign Voxelizer.compute.")]
         public ComputeShader voxelizerCompute;
 
+        [Header("Auto-Wire")]
+        [Tooltip("After bake, automatically find all Toaster visualizer materials and point cloud renderers in the scene and wire them to the baked grid.")]
+        public bool autoWireVisualizers = true;
+
         [Header("Debug")]
+        [Tooltip("Draw yellow wireframe of the bake volume in the Scene view.")]
         public bool drawGizmos = true;
 
         // The Result
+        [HideInInspector]
         public RenderTexture voxelGrid;
 
         // Buffers
@@ -41,6 +57,9 @@ namespace Toaster
                 Appliance.LogWarning("No compute shader assigned!");
                 return;
             }
+
+            // Apply browning level preset
+            ApplyBrowningPreset();
 
             ReleaseBuffers();
 
@@ -156,6 +175,10 @@ namespace Toaster
 
             // Diagnostic: readback a slice to verify data was written
             VerifyGrid(resX, resY);
+
+            // Auto-wire visualizers
+            if (autoWireVisualizers)
+                WireVisualizers();
         }
 
         void VerifyGrid(int resX, int resY)
@@ -215,6 +238,62 @@ namespace Toaster
             if (normalBuffer != null) { normalBuffer.Release(); normalBuffer = null; }
             if (uvBuffer != null) { uvBuffer.Release(); uvBuffer = null; }
             if (indexBuffer != null) { indexBuffer.Release(); indexBuffer = null; }
+        }
+
+        void ApplyBrowningPreset()
+        {
+            voxelSize = browningLevel switch
+            {
+                Appliance.BrowningLevel.Raw => 1.0f,
+                Appliance.BrowningLevel.Light => 0.5f,
+                Appliance.BrowningLevel.Burnt => 0.25f,
+                _ => voxelSize
+            };
+            Appliance.Log($"Browning level: {browningLevel} → voxelSize = {voxelSize}");
+        }
+
+        /// <summary>
+        /// Finds all Toaster visualizer materials and point cloud renderers in the scene
+        /// and wires them to this baker's voxel grid.
+        /// </summary>
+        [ContextMenu("Wire Visualizers")]
+        public void WireVisualizers()
+        {
+            if (voxelGrid == null)
+            {
+                Appliance.LogWarning("No voxel grid to wire — bake first.");
+                return;
+            }
+
+            int wiredCount = 0;
+
+            // Wire all MeshRenderers using Toaster shaders
+            var renderers = FindObjectsByType<MeshRenderer>(FindObjectsSortMode.None);
+            foreach (var rend in renderers)
+            {
+                var mat = rend.sharedMaterial;
+                if (mat == null || mat.shader == null) continue;
+
+                // Match any shader in the Toaster/ namespace
+                if (mat.shader.name.StartsWith("Toaster/"))
+                {
+                    if (mat.HasTexture("_VolumeTex"))
+                    {
+                        mat.SetTexture("_VolumeTex", voxelGrid);
+                        wiredCount++;
+                    }
+                }
+            }
+
+            // Wire all VoxelPointCloudRenderers
+            var pointClouds = FindObjectsByType<VoxelPointCloudRenderer>(FindObjectsSortMode.None);
+            foreach (var pc in pointClouds)
+            {
+                pc.ConfigureFromBaker(this);
+                wiredCount++;
+            }
+
+            Appliance.Log($"Auto-wired {wiredCount} visualizer(s) to voxel grid.");
         }
 
         private void OnDrawGizmos()
