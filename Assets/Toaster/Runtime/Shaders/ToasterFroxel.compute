@@ -69,12 +69,7 @@ struct LightGPUData
 
 StructuredBuffer<LightGPUData> _LightDataBuffer;
 int _LightCount;
-float _ScatterAnisotropy; // Henyey-Greenstein g parameter (-1..1)
-
-// Max shadow ray steps — must be high enough that step size < voxel width
-// For a 16m min-axis volume: 16/128 = 0.125m steps (well under typical 0.5m voxels)
-#define SHADOW_MAX_STEPS 128
-#define SHADOW_DENSITY_THRESHOLD 0.5 // accumulated density for full occlusion
+// Note: _ScatterAnisotropy removed — real-time light eval replaced by baked-only pipeline
 
 // ============================================================
 // Helpers
@@ -95,149 +90,6 @@ float4 SampleVolumeGrid(int gridIndex, float3 uvw)
         case 7: return VolumeGrid7.SampleLevel(sampler_linear_clamp, uvw, 0);
         default: return float4(0, 0, 0, 0);
     }
-}
-
-// ============================================================
-// Voxel shadow ray — march through baked grids toward light
-// Returns shadow factor: 1 = fully lit, 0 = fully occluded
-// ============================================================
-
-float MarchVoxelShadow(float3 worldPos, float3 toLightDir, float maxDist)
-{
-    float accDensity = 0.0;
-
-    // March through each active volume
-    for (int v = 0; v < _VolumeCount; v++)
-    {
-        VolumeGPUData vol = _VolumeDataBuffer[v];
-        int gridIdx = (int)vol.settings.z;
-
-        float3 bMin = vol.boundsMin.xyz;
-        float3 bMax = vol.boundsMax.xyz;
-        float3 volSize = bMax - bMin;
-
-        // Ray-AABB intersection — find entry/exit t along the ray
-        float3 invDir = 1.0 / (toLightDir + float3(0.000001, 0.000001, 0.000001));
-        float3 t0 = (bMin - worldPos) * invDir;
-        float3 t1 = (bMax - worldPos) * invDir;
-        float3 tMin = min(t0, t1);
-        float3 tMax = max(t0, t1);
-
-        float tEntry = max(max(tMin.x, tMin.y), tMin.z);
-        float tExit  = min(min(tMax.x, tMax.y), tMax.z);
-
-        // Start from current position (or volume entry if outside)
-        tEntry = max(tEntry, 0.0);
-        tExit  = min(tExit, maxDist);
-
-        if (tEntry >= tExit) continue; // ray misses this volume
-
-        // Step size — distribute steps evenly across ray segment through volume
-        // e.g. 10m ray / 128 steps = 0.078m — well under typical 0.5m voxels
-        float rayLen = tExit - tEntry;
-        float stepWorld = rayLen / (float)SHADOW_MAX_STEPS;
-        float t = tEntry + stepWorld * 0.5; // half-step offset to avoid self-shadow
-
-        for (int s = 0; s < SHADOW_MAX_STEPS; s++)
-        {
-            if (t >= tExit) break;
-
-            float3 samplePos = worldPos + toLightDir * t;
-            float3 uvw = (samplePos - bMin) / volSize;
-
-            // Sample density from baked grid (alpha channel = voxel occupancy)
-            float density = SampleVolumeGrid(gridIdx, uvw).a;
-            accDensity += density * stepWorld;
-
-            // Early out if fully occluded
-            if (accDensity >= SHADOW_DENSITY_THRESHOLD)
-                return 0.0;
-
-            t += stepWorld;
-        }
-    }
-
-    // Exponential falloff — soft shadow from accumulated density
-    return exp(-accDensity * (1.0 / SHADOW_DENSITY_THRESHOLD) * 4.0);
-}
-
-// Henyey-Greenstein phase function — anisotropic light scattering
-// g > 0 = forward scattering (looking into light), g < 0 = back scattering, g = 0 = isotropic
-float HenyeyGreenstein(float cosTheta, float g)
-{
-    float g2 = g * g;
-    float denom = 1.0 + g2 - 2.0 * g * cosTheta;
-    return (1.0 - g2) / (4.0 * 3.14159265 * pow(abs(denom), 1.5));
-}
-
-// Max distance to march shadow rays for directional lights
-#define DIRECTIONAL_SHADOW_DIST 50.0
-
-// Evaluate a single scene light at a world position (with voxel occlusion)
-float3 EvaluateLight(LightGPUData light, float3 worldPos, float3 viewDir)
-{
-    int lightType = (int)light.typeAndFlags.x;
-    float3 lightColor = light.colorAndIntensity.rgb * light.colorAndIntensity.w;
-
-    float3 toLight;
-    float attenuation = 1.0;
-    float shadowDist;
-
-    if (lightType == 2) // Directional
-    {
-        toLight = -light.directionAndAngle.xyz;
-        shadowDist = DIRECTIONAL_SHADOW_DIST;
-        // No distance attenuation for directional
-    }
-    else // Point or Spot
-    {
-        float3 delta = light.positionAndRange.xyz - worldPos;
-        float dist = length(delta);
-        float range = light.positionAndRange.w;
-
-        if (dist >= range) return float3(0, 0, 0);
-
-        toLight = delta / max(dist, 0.001);
-        shadowDist = dist;
-
-        // Smooth distance attenuation (URP style)
-        float distNorm = dist / range;
-        float distNorm2 = distNorm * distNorm;
-        float falloff = saturate(1.0 - distNorm2 * distNorm2);
-        attenuation = (falloff * falloff) / max(dist * dist, 0.0001);
-
-        // Spot cone attenuation
-        if (lightType == 1)
-        {
-            float cosOuter = light.directionAndAngle.w;
-            float cosInner = light.typeAndFlags.y;
-            float cosAngle = dot(-toLight, light.directionAndAngle.xyz);
-            attenuation *= saturate((cosAngle - cosOuter) / max(cosInner - cosOuter, 0.001));
-        }
-    }
-
-    // Early out before expensive shadow march
-    if (attenuation < 0.001) return float3(0, 0, 0);
-
-    // Voxel shadow ray — march through baked geometry toward the light
-    float shadow = MarchVoxelShadow(worldPos, toLight, shadowDist);
-
-    // Phase function — how much light scatters toward the camera
-    float cosTheta = dot(toLight, viewDir);
-    float phase = HenyeyGreenstein(cosTheta, _ScatterAnisotropy);
-
-    return lightColor * attenuation * phase * shadow;
-}
-
-// Evaluate all scene lights at a world position
-float3 EvaluateSceneLights(float3 worldPos, float3 viewDir)
-{
-    float3 totalLight = float3(0, 0, 0);
-    for (int i = 0; i < _LightCount; i++)
-    {
-        totalLight += EvaluateLight(_LightDataBuffer[i], worldPos, viewDir);
-    }
-    return totalLight;
 }
 
 // Edge falloff — fade density near volume boundaries for smooth overlap
@@ -277,13 +129,8 @@ void InjectMedia(uint3 id : SV_DispatchThreadID)
     // Reconstruct world position for this froxel
     float3 worldPos = FroxelToWorld(id, jitter);
 
-    // View direction from camera to froxel (for phase function)
-    float3 viewDir = normalize(worldPos - _CameraPos);
-
-    // Evaluate scene lights ONCE per froxel (not per-volume — avoids double-counting in overlap)
-    float3 directLight = EvaluateSceneLights(worldPos, viewDir);
-
-    // Compute light-localized density boost ONCE per froxel
+    // Light-localized density boost — makes fog denser near point/spot lights
+    // (purely a density effect, not a color effect — no light bleed through walls)
     float lightBoost = 0.0;
     if (_LightDensityBoost > 0.0)
     {
@@ -358,18 +205,19 @@ void InjectMedia(uint3 id : SV_DispatchThreadID)
         float3 bakedColor = (voxelData.rgb + _AmbientFogColor.rgb)
                           * vol.settings.y * _FogIntensity;
 
-        // In-scattering = color * density * albedo
-        // Albedo decouples brightness from opacity — >1 makes thin fog visible
-        scattering += (bakedColor + directLight) * baseDensity * _ScatteringAlbedo;
+        // In-scattering = baked light color * density * albedo
+        // The baked lighting grid already has properly traced/shadowed light —
+        // no need for real-time light evaluation (which can't match offline trace quality)
+        scattering += bakedColor * baseDensity * _ScatteringAlbedo;
         extinction += baseDensity;
     }
 
-    // Light-localized density boost: applied once on top of total volume density
+    // Light-localized density boost: makes fog denser near lights (halo effect)
+    // Only adds extinction (opacity), not color — prevents light bleed through walls
     if (lightBoost > 0.0 && extinction > 0.0)
     {
         float boostExtinction = lightBoost * _LightDensityBoost * _FogDensity;
         extinction += boostExtinction;
-        scattering += directLight * boostExtinction * _ScatteringAlbedo;
     }
 
     float4 result = float4(scattering, extinction);
