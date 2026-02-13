@@ -675,7 +675,7 @@ namespace Toaster
             var sponza = (GameObject)PrefabUtility.InstantiatePrefab(sponzaPrefab);
             sponza.name = "Sponza";
             sponza.transform.position = Vector3.zero;
-            sponza.transform.rotation = Quaternion.identity;
+            sponza.transform.rotation = Quaternion.Euler(-90f, 0f, 0f); // FBX is Z-up, Unity is Y-up
 
             // Mark all meshes as Contribute GI (needed for Meta Pass)
             foreach (var renderer in sponza.GetComponentsInChildren<MeshRenderer>())
