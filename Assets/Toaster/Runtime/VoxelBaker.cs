@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 #if UNITY_EDITOR
@@ -67,8 +68,8 @@ namespace Toaster
         private ComputeBuffer accumBuffer;
 
         // Incremental bake — stores hash of each renderer's transform for dirty tracking
-        private System.Collections.Generic.Dictionary<int, int> rendererHashes
-            = new System.Collections.Generic.Dictionary<int, int>();
+        private Dictionary<int, int> rendererHashes
+            = new Dictionary<int, int>();
 
         static int HashRenderer(MeshRenderer rend)
         {
@@ -98,6 +99,11 @@ namespace Toaster
 
             // Apply browning level preset
             ApplyBrowningPreset();
+
+#if UNITY_EDITOR
+            try {
+            EditorUtility.DisplayProgressBar("Toaster Bake", "Setting up grid...", 0f);
+#endif
 
             ReleaseBuffers();
 
@@ -153,8 +159,122 @@ namespace Toaster
             // 3. Setup Temp Meta Texture
             RenderTexture metaTempRT = RenderTexture.GetTemporary(256, 256, 0, RenderTextureFormat.ARGB32);
 
-            // 4. Find all renderers
+            // 4. Find and filter renderers, then batch geometry into mega-buffers
             var renderers = FindObjectsByType<MeshRenderer>(FindObjectsSortMode.None);
+
+            // --- Phase 1: Filter eligible renderers ---
+            var eligible = new List<(MeshRenderer rend, Mesh mesh)>();
+            foreach (var rend in renderers)
+            {
+                MeshFilter mf = rend.GetComponent<MeshFilter>();
+                if (mf == null || mf.sharedMesh == null) continue;
+
+                if (skipToasterShaders && rend.sharedMaterial != null &&
+                    rend.sharedMaterial.shader != null &&
+                    rend.sharedMaterial.shader.name.StartsWith("Toaster/"))
+                    continue;
+
+#if UNITY_EDITOR
+                if (requireContributeGI)
+                {
+                    var flags = GameObjectUtility.GetStaticEditorFlags(rend.gameObject);
+                    if ((flags & StaticEditorFlags.ContributeGI) == 0)
+                        continue;
+                }
+#endif
+
+                if (incrementalBake)
+                {
+                    int instanceId = rend.GetInstanceID();
+                    int currentHash = HashRenderer(rend);
+                    if (rendererHashes.TryGetValue(instanceId, out int lastHash) && lastHash == currentHash)
+                        continue;
+                    rendererHashes[instanceId] = currentHash;
+                }
+
+                Mesh mesh = mf.sharedMesh;
+                if (!mesh.isReadable)
+                {
+                    Appliance.LogWarning($"Mesh '{mesh.name}' is not readable (enable Read/Write in import settings). Skipping.");
+                    continue;
+                }
+                if (rend.sharedMaterials.Length == 0)
+                {
+                    Appliance.LogWarning($"Renderer '{rend.name}' has no materials. Skipping.");
+                    continue;
+                }
+
+                eligible.Add((rend, mesh));
+            }
+
+            // --- Phase 2: Merge all geometry into mega-buffers (world-space) ---
+            // One upload, one bind — eliminates per-object GPU buffer churn.
+            int totalVertCount = 0;
+            int totalIdxCount = 0;
+            foreach (var (_, mesh) in eligible)
+            {
+                totalVertCount += mesh.vertexCount;
+                totalIdxCount += mesh.triangles.Length;
+            }
+
+            var megaVerts = new Vector3[totalVertCount];
+            var megaNormals = new Vector3[totalVertCount];
+            var megaUVs = new Vector2[totalVertCount];
+            var megaIndices = new int[totalIdxCount];
+
+            // Track per-submesh dispatch info: (indexOffset into mega-buffer, triCount, renderer, submeshIndex)
+            var dispatchList = new List<(int indexOffset, int triCount, MeshRenderer rend, Mesh mesh, int submesh)>();
+
+            int vertOffset = 0;
+            int idxOffset = 0;
+
+            foreach (var (rend, mesh) in eligible)
+            {
+                var localToWorld = rend.transform.localToWorldMatrix;
+                var verts = mesh.vertices;
+                var normals = mesh.normals;
+                var uvs = mesh.uv2.Length > 0 ? mesh.uv2 : mesh.uv;
+                if (normals.Length == 0) normals = new Vector3[verts.Length];
+                if (uvs.Length == 0) uvs = new Vector2[verts.Length];
+
+                // Transform vertices and normals to world space
+                for (int v = 0; v < verts.Length; v++)
+                {
+                    megaVerts[vertOffset + v] = localToWorld.MultiplyPoint3x4(verts[v]);
+                    megaNormals[vertOffset + v] = localToWorld.MultiplyVector(normals[v]).normalized;
+                    megaUVs[vertOffset + v] = uvs[v];
+                }
+
+                // Copy indices with vertex offset adjustment
+                var indices = mesh.triangles;
+                for (int j = 0; j < indices.Length; j++)
+                    megaIndices[idxOffset + j] = indices[j] + vertOffset;
+
+                // Record per-submesh dispatch info
+                for (int i = 0; i < mesh.subMeshCount; i++)
+                {
+                    var subMeshDesc = mesh.GetSubMesh(i);
+                    int subIdxOffset = idxOffset + subMeshDesc.indexStart;
+                    int subTriCount = subMeshDesc.indexCount / 3;
+                    dispatchList.Add((subIdxOffset, subTriCount, rend, mesh, i));
+                }
+
+                vertOffset += verts.Length;
+                idxOffset += indices.Length;
+            }
+
+            // Upload merged data once
+            if (totalVertCount > 0)
+            {
+                EnsureBuffer(ref vertBuffer, totalVertCount, 12);
+                vertBuffer.SetData(megaVerts);
+                EnsureBuffer(ref normalBuffer, totalVertCount, 12);
+                normalBuffer.SetData(megaNormals);
+                EnsureBuffer(ref uvBuffer, totalVertCount, 8);
+                uvBuffer.SetData(megaUVs);
+                EnsureBuffer(ref indexBuffer, totalIdxCount, 4);
+                indexBuffer.SetData(megaIndices);
+            }
 
             CommandBuffer cmd = new CommandBuffer();
             cmd.name = "Toaster_MetaBake";
@@ -168,124 +288,75 @@ namespace Toaster
             voxelizerCompute.SetInt("GridResY", resY);
             voxelizerCompute.SetInt("GridResZ", resZ);
 
-            int objectCount = 0;
-            int triangleCount = 0;
-
-            foreach (var rend in renderers)
+            // Bind mega-buffers once — vertices are already in world space
+            if (totalVertCount > 0)
             {
-                MeshFilter mf = rend.GetComponent<MeshFilter>();
-                if (mf == null || mf.sharedMesh == null) continue;
-
-                // --- Filtering ---
-                // Skip objects using Toaster shaders (fog volumes, debug visualizers)
-                if (skipToasterShaders && rend.sharedMaterial != null &&
-                    rend.sharedMaterial.shader != null &&
-                    rend.sharedMaterial.shader.name.StartsWith("Toaster/"))
-                    continue;
-
-#if UNITY_EDITOR
-                // Skip objects without ContributeGI static flag
-                if (requireContributeGI)
-                {
-                    var flags = GameObjectUtility.GetStaticEditorFlags(rend.gameObject);
-                    if ((flags & StaticEditorFlags.ContributeGI) == 0)
-                        continue;
-                }
-#endif
-
-                // Incremental: skip objects that haven't moved since last bake
-                if (incrementalBake)
-                {
-                    int instanceId = rend.GetInstanceID();
-                    int currentHash = HashRenderer(rend);
-                    if (rendererHashes.TryGetValue(instanceId, out int lastHash) && lastHash == currentHash)
-                        continue;
-                    rendererHashes[instanceId] = currentHash;
-                }
-
-                Mesh mesh = mf.sharedMesh;
-
-                // Guard: mesh must be readable to access vertex data on CPU
-                if (!mesh.isReadable)
-                {
-                    Appliance.LogWarning($"Mesh '{mesh.name}' is not readable (enable Read/Write in import settings). Skipping.");
-                    continue;
-                }
-
-                // Guard: renderer must have at least one material
-                if (rend.sharedMaterials.Length == 0)
-                {
-                    Appliance.LogWarning($"Renderer '{rend.name}' has no materials. Skipping.");
-                    continue;
-                }
-
-                UploadMeshData(mesh);
                 voxelizerCompute.SetBuffer(kernel, "Vertices", vertBuffer);
                 voxelizerCompute.SetBuffer(kernel, "Normals", normalBuffer);
                 voxelizerCompute.SetBuffer(kernel, "UVs", uvBuffer);
                 voxelizerCompute.SetBuffer(kernel, "Indices", indexBuffer);
-                voxelizerCompute.SetMatrix("LocalToWorld", rend.transform.localToWorldMatrix);
+                voxelizerCompute.SetMatrix("LocalToWorld", Matrix4x4.identity); // Already world-space
+            }
 
-                for (int i = 0; i < mesh.subMeshCount; i++)
+            int objectCount = eligible.Count;
+            int triangleCount = 0;
+
+            // --- Phase 3: Per-submesh Meta bake + dispatch ---
+            for (int d = 0; d < dispatchList.Count; d++)
+            {
+                var (subIdxOffset, subTriCount, rend, mesh, submeshIdx) = dispatchList[d];
+
+#if UNITY_EDITOR
+                EditorUtility.DisplayProgressBar("Toaster Bake",
+                    $"Voxelizing {rend.name} ({d + 1}/{dispatchList.Count})",
+                    (float)d / dispatchList.Count);
+#endif
+
+                Material mat = rend.sharedMaterials[Mathf.Min(submeshIdx, rend.sharedMaterials.Length - 1)];
+                if (mat == null) continue;
+
+                int metaPass = mat.FindPass("Meta");
+                if (metaPass == -1)
                 {
-                    Material mat = rend.sharedMaterials[Mathf.Min(i, rend.sharedMaterials.Length - 1)];
-                    if (mat == null) continue;
-
-                    int metaPass = mat.FindPass("Meta");
-                    if (metaPass == -1)
-                    {
-                        Appliance.LogWarning($"Material '{mat.name}' has no Meta pass, skipping.");
-                        continue;
-                    }
-
-                    // --- STEP A: Bake albedo/emission via Meta Pass ---
-                    // Fill with material base color as fallback for safety
-                    Color baseColor = mat.HasColor("_BaseColor") ? mat.GetColor("_BaseColor") : Color.white;
-
-                    cmd.Clear();
-                    cmd.SetRenderTarget(metaTempRT);
-                    cmd.ClearRenderTarget(true, true, baseColor);
-
-                    // URP Meta Pass CBUFFER setup — required for UV-space rasterization
-                    cmd.SetGlobalVector("unity_MetaVertexControl", new Vector4(1, 0, 0, 0));
-                    cmd.SetGlobalVector("unity_MetaFragmentControl", new Vector4(1, 0, 0, 0));
-                    cmd.SetGlobalVector("unity_LightmapST", new Vector4(1, 1, 0, 0));
-
-                    // If mesh lacks UV1 (lightmap UVs), the Meta Pass collapses
-                    // vertices to (0,0). Temporarily inject UV1 = UV0 if the mesh
-                    // is writable; otherwise the _BaseColor fill serves as fallback.
-                    bool generatedUV1 = false;
-                    if ((mesh.uv2 == null || mesh.uv2.Length == 0) && mesh.isReadable)
-                    {
-                        if (mesh.uv != null && mesh.uv.Length > 0)
-                        {
-                            mesh.SetUVs(1, mesh.uv);
-                            generatedUV1 = true;
-                        }
-                    }
-
-                    cmd.DrawRenderer(rend, mat, i, metaPass);
-                    Graphics.ExecuteCommandBuffer(cmd);
-
-                    // Restore mesh — remove injected UV1
-                    if (generatedUV1)
-                        mesh.SetUVs(1, new System.Collections.Generic.List<Vector2>());
-
-                    // --- STEP B: Voxelize on GPU ---
-                    voxelizerCompute.SetTexture(kernel, "MetaTexture", metaTempRT);
-
-                    var subMeshDesc = mesh.GetSubMesh(i);
-                    voxelizerCompute.SetInt("IndexOffset", subMeshDesc.indexStart);
-                    int subMeshTriCount = subMeshDesc.indexCount / 3;
-                    voxelizerCompute.SetInt("TriangleCount", subMeshTriCount);
-
-                    int threadGroups = Mathf.CeilToInt(subMeshTriCount / 64f);
-                    voxelizerCompute.Dispatch(kernel, Mathf.Max(1, threadGroups), 1, 1);
-
-                    triangleCount += subMeshTriCount;
+                    Appliance.LogWarning($"Material '{mat.name}' has no Meta pass, skipping.");
+                    continue;
                 }
 
-                objectCount++;
+                // --- Meta Pass bake ---
+                Color baseColor = mat.HasColor("_BaseColor") ? mat.GetColor("_BaseColor") : Color.white;
+
+                cmd.Clear();
+                cmd.SetRenderTarget(metaTempRT);
+                cmd.ClearRenderTarget(true, true, baseColor);
+                cmd.SetGlobalVector("unity_MetaVertexControl", new Vector4(1, 0, 0, 0));
+                cmd.SetGlobalVector("unity_MetaFragmentControl", new Vector4(1, 0, 0, 0));
+                cmd.SetGlobalVector("unity_LightmapST", new Vector4(1, 1, 0, 0));
+
+                bool generatedUV1 = false;
+                if ((mesh.uv2 == null || mesh.uv2.Length == 0) && mesh.isReadable)
+                {
+                    if (mesh.uv != null && mesh.uv.Length > 0)
+                    {
+                        mesh.SetUVs(1, mesh.uv);
+                        generatedUV1 = true;
+                    }
+                }
+
+                cmd.DrawRenderer(rend, mat, submeshIdx, metaPass);
+                Graphics.ExecuteCommandBuffer(cmd);
+
+                if (generatedUV1)
+                    mesh.SetUVs(1, new List<Vector2>());
+
+                // --- Dispatch voxelization ---
+                voxelizerCompute.SetTexture(kernel, "MetaTexture", metaTempRT);
+                voxelizerCompute.SetInt("IndexOffset", subIdxOffset);
+                voxelizerCompute.SetInt("TriangleCount", subTriCount);
+
+                int threadGroups = Mathf.CeilToInt(subTriCount / 64f);
+                voxelizerCompute.Dispatch(kernel, Mathf.Max(1, threadGroups), 1, 1);
+
+                triangleCount += subTriCount;
             }
 
             // Release pooled mesh buffers (but NOT accumBuffer — needed for FinalizeGrid)
@@ -294,6 +365,9 @@ namespace Toaster
             RenderTexture.ReleaseTemporary(metaTempRT);
             cmd.Release();
 
+#if UNITY_EDITOR
+            EditorUtility.DisplayProgressBar("Toaster Bake", "Finalizing voxel grid...", 0.85f);
+#endif
             // 5. Finalize — average accumulated colors and write to voxel grid
             int finalizeKernel = voxelizerCompute.FindKernel("FinalizeGrid");
             voxelizerCompute.SetTexture(finalizeKernel, "VoxelGrid", voxelGrid);
@@ -320,8 +394,14 @@ namespace Toaster
 
             // Serialize to Texture3D asset
 #if UNITY_EDITOR
+            EditorUtility.DisplayProgressBar("Toaster Bake", "Serializing grid...", 0.95f);
             if (serializeAfterBake)
                 SerializeGrid(resX, resY, resZ);
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+            }
 #endif
 
             // Auto-wire visualizers
@@ -354,28 +434,6 @@ namespace Toaster
                 Appliance.Log($"Diagnostic: {nonZero}/{pixels.Length} non-zero pixels in first slice of voxel grid.");
             else
                 Appliance.LogWarning("Diagnostic: Voxel grid first slice is EMPTY — bake may have failed.");
-        }
-
-        void UploadMeshData(Mesh mesh)
-        {
-            var verts = mesh.vertices;
-            EnsureBuffer(ref vertBuffer, verts.Length, 12);
-            vertBuffer.SetData(verts);
-
-            var normals = mesh.normals;
-            if (normals.Length == 0) normals = new Vector3[verts.Length];
-            EnsureBuffer(ref normalBuffer, normals.Length, 12);
-            normalBuffer.SetData(normals);
-
-            // Use UV2 (lightmap) if available, else UV0
-            var uvs = mesh.uv2.Length > 0 ? mesh.uv2 : mesh.uv;
-            if (uvs.Length == 0) uvs = new Vector2[verts.Length];
-            EnsureBuffer(ref uvBuffer, uvs.Length, 8);
-            uvBuffer.SetData(uvs);
-
-            var indices = mesh.triangles;
-            EnsureBuffer(ref indexBuffer, indices.Length, 4);
-            indexBuffer.SetData(indices);
         }
 
         /// <summary>
@@ -574,6 +632,14 @@ namespace Toaster
                         wiredCount++;
                     }
                 }
+            }
+
+            // Wire all ToasterVolume components
+            var volumes = FindObjectsByType<ToasterVolume>(FindObjectsSortMode.None);
+            foreach (var vol in volumes)
+            {
+                vol.ConfigureFromBaker(this);
+                wiredCount++;
             }
 
             // Wire all VoxelPointCloudRenderers

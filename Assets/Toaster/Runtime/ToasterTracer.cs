@@ -1,5 +1,8 @@
 using UnityEngine;
 using UnityEngine.Rendering;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 namespace Toaster
 {
@@ -74,6 +77,11 @@ namespace Toaster
 
             Appliance.Log($"Tracing lighting: {resX}x{resY}x{resZ}, {raysPerVoxel} rays/voxel, {maxBounces} bounces");
 
+#if UNITY_EDITOR
+            try {
+            EditorUtility.DisplayProgressBar("Toaster Trace", "Setting up lighting grid...", 0f);
+#endif
+
             // Create lighting grid RT
             if (lightingGrid != null) lightingGrid.Release();
             lightingGrid = new RenderTexture(resX, resY, 0, RenderTextureFormat.ARGBHalf);
@@ -115,6 +123,9 @@ namespace Toaster
             tracerCompute.SetBuffer(traceKernel, "LightPositions", lightPosBuffer);
             tracerCompute.SetBuffer(traceKernel, "LightColors", lightColorBuffer);
 
+#if UNITY_EDITOR
+            EditorUtility.DisplayProgressBar("Toaster Trace", "Dispatching path tracer...", 0.5f);
+#endif
             // Dispatch — 4x4x4 threads per group
             tracerCompute.Dispatch(traceKernel,
                 Mathf.CeilToInt(resX / 4f),
@@ -122,6 +133,14 @@ namespace Toaster
                 Mathf.CeilToInt(resZ / 4f));
 
             ReleaseBuffers();
+
+#if UNITY_EDITOR
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+            }
+#endif
 
             Appliance.Log("Lighting trace complete!");
         }

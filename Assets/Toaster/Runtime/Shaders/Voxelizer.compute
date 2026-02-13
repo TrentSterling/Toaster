@@ -146,18 +146,34 @@ bool AABBIntersectsTriangle(float3 boxMin, float3 boxMax, float3 v0, float3 v1, 
     return true;
 }
 
-// Barycentric coordinates to interpolate UVs
+// Project point onto triangle plane, then compute barycentric coordinates.
+// This gives exact UV interpolation even when the point (voxel center) is
+// off-plane — critical for accurate Meta texture sampling.
 float3 CalculateBarycentric(float3 p, float3 a, float3 b, float3 c)
 {
-    float3 v0 = b - a, v1 = c - a, v2 = p - a;
-    float d00 = dot(v0, v0);
-    float d01 = dot(v0, v1);
-    float d11 = dot(v1, v1);
-    float d20 = dot(v2, v0);
-    float d21 = dot(v2, v1);
+    float3 edge0 = b - a;
+    float3 edge1 = c - a;
+    float3 normal = cross(edge0, edge1);
+    float normalLenSq = dot(normal, normal);
+
+    if (normalLenSq < 1e-10)
+        return float3(1, 0, 0); // Degenerate triangle
+
+    // Project p onto the triangle plane
+    float3 ap = p - a;
+    float dist = dot(ap, normal) / normalLenSq;
+    float3 projected = p - dist * normal;
+
+    // Barycentric coordinates of the projected point
+    float3 v2 = projected - a;
+    float d00 = dot(edge0, edge0);
+    float d01 = dot(edge0, edge1);
+    float d11 = dot(edge1, edge1);
+    float d20 = dot(v2, edge0);
+    float d21 = dot(v2, edge1);
     float denom = d00 * d11 - d01 * d01;
 
-    if (abs(denom) < 1e-5)
+    if (abs(denom) < 1e-10)
         return float3(1, 0, 0); // Degenerate triangle
 
     float v = (d11 * d20 - d01 * d21) / denom;
@@ -187,8 +203,12 @@ void VoxelizeMesh(uint3 id : SV_DispatchThreadID)
     float2 uv2 = UVs[i2];
 
     // 2. Calculate Triangle Bounds in Voxel Grid Space
-    float3 triMin = min(v0, min(v1, v2));
-    float3 triMax = max(v0, max(v1, v2));
+    // Conservative rasterization: expand bounds by half a voxel so thin geometry
+    // (walls, floors at voxel boundaries) doesn't slip between grid cells.
+    // The SAT test still does precise intersection — this just widens the search.
+    float halfVoxel = VoxelSize * 0.5;
+    float3 triMin = min(v0, min(v1, v2)) - halfVoxel;
+    float3 triMax = max(v0, max(v1, v2)) + halfVoxel;
 
     int3 gridMin = max(0, (int3) ((triMin - WorldBoundsMin) / VoxelSize));
     int3 gridMax = min(GridResolution - 1, (int3) ((triMax - WorldBoundsMin) / VoxelSize));

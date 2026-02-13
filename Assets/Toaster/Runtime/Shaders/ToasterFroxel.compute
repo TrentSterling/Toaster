@@ -1,0 +1,211 @@
+#pragma kernel ClearFroxels
+#pragma kernel InjectMedia
+#pragma kernel IntegrateFroxels
+
+#pragma multi_compile _ TEMPORAL_REPROJECTION
+
+#include "ToasterFroxelCommon.hlsl"
+
+// ============================================================
+// Froxel textures
+// ============================================================
+
+RWTexture3D<float4> FroxelScattering;  // (inScattered.rgb, extinction)
+RWTexture3D<float4> FroxelIntegrated;  // (accLight.rgb, transmittance)
+
+#ifdef TEMPORAL_REPROJECTION
+Texture3D<float4> FroxelHistory;       // Previous frame's scattering
+SamplerState samplerFroxelHistory;
+float _TemporalBlendAlpha;             // EMA blend weight (0.05 = 95% history)
+#endif
+
+// ============================================================
+// Volume data
+// ============================================================
+
+struct VolumeGPUData
+{
+    float4 boundsMin;  // xyz = world min, w = unused
+    float4 boundsMax;  // xyz = world max, w = unused
+    float4 settings;   // x = density, y = intensity, z = gridIndex, w = edgeFalloff
+};
+
+StructuredBuffer<VolumeGPUData> _VolumeDataBuffer;
+int _VolumeCount;
+
+// Volume grids — can't use Texture3D arrays in HLSL, use named slots
+Texture3D<float4> VolumeGrid0;
+Texture3D<float4> VolumeGrid1;
+Texture3D<float4> VolumeGrid2;
+Texture3D<float4> VolumeGrid3;
+Texture3D<float4> VolumeGrid4;
+Texture3D<float4> VolumeGrid5;
+Texture3D<float4> VolumeGrid6;
+Texture3D<float4> VolumeGrid7;
+SamplerState samplerVolumeGrid0; // Shared trilinear sampler
+
+// Global fog params
+float _FogDensity;
+float _FogIntensity;
+
+// ============================================================
+// Helpers
+// ============================================================
+
+float4 SampleVolumeGrid(int gridIndex, float3 uvw)
+{
+    // Switch-case dispatch — HLSL can't index Texture3D arrays
+    switch (gridIndex)
+    {
+        case 0: return VolumeGrid0.SampleLevel(samplerVolumeGrid0, uvw, 0);
+        case 1: return VolumeGrid1.SampleLevel(samplerVolumeGrid0, uvw, 0);
+        case 2: return VolumeGrid2.SampleLevel(samplerVolumeGrid0, uvw, 0);
+        case 3: return VolumeGrid3.SampleLevel(samplerVolumeGrid0, uvw, 0);
+        case 4: return VolumeGrid4.SampleLevel(samplerVolumeGrid0, uvw, 0);
+        case 5: return VolumeGrid5.SampleLevel(samplerVolumeGrid0, uvw, 0);
+        case 6: return VolumeGrid6.SampleLevel(samplerVolumeGrid0, uvw, 0);
+        case 7: return VolumeGrid7.SampleLevel(samplerVolumeGrid0, uvw, 0);
+        default: return float4(0, 0, 0, 0);
+    }
+}
+
+// Edge falloff — fade density near volume boundaries for smooth overlap
+float EdgeFalloff(float3 uvw, float falloff)
+{
+    if (falloff <= 0.0) return 1.0;
+    float3 edgeDist = min(uvw, 1.0 - uvw);
+    float minDist = min(edgeDist.x, min(edgeDist.y, edgeDist.z));
+    return saturate(minDist / falloff);
+}
+
+// ============================================================
+// Kernel 0: Clear froxel scattering grid
+// ============================================================
+
+[numthreads(4, 4, 4)]
+void ClearFroxels(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= (uint3)FroxelResolution))
+        return;
+    FroxelScattering[id] = float4(0, 0, 0, 0);
+}
+
+// ============================================================
+// Kernel 1: Inject media — sample all volumes into froxel grid
+// ============================================================
+
+[numthreads(4, 4, 4)]
+void InjectMedia(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= (uint3)FroxelResolution))
+        return;
+
+    // Jitter Z to reduce banding
+    float jitter = GetBlueNoiseJitter(id.xy, _FrameIndex) - 0.5;
+
+    // Reconstruct world position for this froxel
+    float3 worldPos = FroxelToWorld(id, jitter);
+
+    // Accumulate scattering and extinction from all volumes
+    float3 scattering = float3(0, 0, 0);
+    float extinction = 0.0;
+
+    for (int v = 0; v < _VolumeCount; v++)
+    {
+        VolumeGPUData vol = _VolumeDataBuffer[v];
+
+        float3 bMin = vol.boundsMin.xyz;
+        float3 bMax = vol.boundsMax.xyz;
+
+        // Check if froxel is inside this volume
+        if (any(worldPos < bMin) || any(worldPos > bMax))
+            continue;
+
+        // World pos → volume UVW [0,1]
+        float3 uvw = (worldPos - bMin) / (bMax - bMin);
+
+        // Edge falloff
+        float edgeFade = EdgeFalloff(uvw, vol.settings.w);
+
+        // Sample the volume's lighting/albedo grid
+        int gridIdx = (int)vol.settings.z;
+        float4 voxelData = SampleVolumeGrid(gridIdx, uvw);
+
+        float density = voxelData.a * vol.settings.x * _FogDensity * edgeFade;
+        float3 color = voxelData.rgb * vol.settings.y * _FogIntensity;
+
+        scattering += color * density;
+        extinction += density;
+    }
+
+    float4 result = float4(scattering, extinction);
+
+    // Temporal reprojection — blend with previous frame
+    #ifdef TEMPORAL_REPROJECTION
+    {
+        // Reproject current world pos to previous frame's froxel UV
+        float4 prevClip = mul(_PrevViewProj, float4(worldPos, 1.0));
+        prevClip.xyz /= prevClip.w;
+        float2 prevUV = prevClip.xy * 0.5 + 0.5;
+        #if UNITY_UV_STARTS_AT_TOP
+        prevUV.y = 1.0 - prevUV.y;
+        #endif
+
+        // Check if reprojected position is within screen
+        if (all(prevUV >= 0.0) && all(prevUV <= 1.0))
+        {
+            float prevDepth = SliceToDepth((float)id.z + 0.5);
+            float prevSlice = DepthToSlice(prevDepth); // Approximate — assumes similar depth distribution
+            float3 historyUVW = float3(prevUV, prevSlice / (float)_FroxelResZ);
+
+            float4 history = FroxelHistory.SampleLevel(samplerFroxelHistory, historyUVW, 0);
+
+            // Exponential moving average
+            result = lerp(history, result, _TemporalBlendAlpha);
+        }
+    }
+    #endif
+
+    FroxelScattering[id] = result;
+}
+
+// ============================================================
+// Kernel 2: Integrate froxels — front-to-back Beer-Lambert
+// Per (x,y) column, walk all Z slices
+// ============================================================
+
+[numthreads(8, 8, 1)]
+void IntegrateFroxels(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_FroxelResX || id.y >= (uint)_FroxelResY)
+        return;
+
+    float3 accLight = float3(0, 0, 0);
+    float transmittance = 1.0;
+
+    for (int z = 0; z < _FroxelResZ; z++)
+    {
+        float4 scatterData = FroxelScattering[int3(id.xy, z)];
+        float3 inScattered = scatterData.rgb;
+        float ext = scatterData.a;
+
+        // Distance between this slice and next (in world units)
+        float d0 = SliceToDepth((float)z);
+        float d1 = SliceToDepth((float)(z + 1));
+        float travelDist = d1 - d0;
+
+        // Beer-Lambert extinction for this slice
+        float sliceTransmittance = exp(-ext * travelDist);
+
+        // Accumulate in-scattered light weighted by remaining transmittance
+        // Energy-conserving integration: use (1 - sliceT) / extinction as the integral
+        // Simplification: for small extinction, this ≈ travelDist
+        float3 sliceScattering = inScattered * travelDist * transmittance;
+        accLight += sliceScattering;
+
+        transmittance *= sliceTransmittance;
+
+        // Write integrated result at each depth (needed for apply shader lookup)
+        FroxelIntegrated[int3(id.xy, z)] = float4(accLight, transmittance);
+    }
+}

@@ -94,3 +94,17 @@ InitTestScene*.unity*
 
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
+
+# Reference samples (external repos)
+/SAMPLES/
+
+# Claude Code
+.claude/
+chathistory.md
+nul
+
+# VS Code
+.vscode/
+
+# Solution files
+*.slnx

@@ -1,11 +1,11 @@
 # Toaster TODO
 
-## Current Status: v0.7 (Crumb)
-Working: Full pipeline — Material bake (Meta Pass) + GPU voxelization + path tracer + volume raymarcher + 6 debug visualizers + editor window + Shader Graph integration.
+## Current Status: v0.8 (Crumb)
+Working: Full pipeline — Material bake (Meta Pass) + GPU voxelization + path tracer + volume raymarcher + 6 debug visualizers + editor window + Shader Graph integration + froxel volumetric fog pipeline.
 
 ---
 
-## Completed (v0.1 → v0.7)
+## Completed (v0.1 → v0.8)
 
 ### Bug Fixes
 - [x] Meta Pass UV1 support — injects UV1 = UV0 for readable meshes without lightmap UVs, _BaseColor fill fallback
@@ -54,14 +54,16 @@ Working: Full pipeline — Material bake (Meta Pass) + GPU voxelization + path t
 - [ ] Async GPU readback for diagnostics instead of blocking `ReadPixels`
 
 ### Runtime
-- [ ] Multiple volume support — blend overlapping Toaster volumes
+- [x] Froxel volumetric fog pipeline — screen-space frustum-aligned 3D grid with Beer-Lambert integration
+- [x] Multi-volume froxel injection — up to 8 volumes composited via StructuredBuffer + named texture slots
+- [x] Temporal reprojection on froxel scattering — EMA blend with history buffer, previous ViewProj reprojection
+- [x] Static volume registry — ToasterVolume.ActiveVolumes for froxel pipeline auto-discovery
 - [ ] Density field support — separate density channel or derive from voxel occupancy
 - [ ] Material property override for per-object voxel color tint
 
 ### Future (see FUTURE.md)
 - [ ] Sparse brickmap storage
-- [ ] Temporal reprojection on froxel scattering
-- [ ] Clipmap compositing
+- [ ] Clipmap compositing (near/far cascades)
 - [ ] DXR hardware ray tracing for shadow rays
 
 ---

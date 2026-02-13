@@ -8,6 +8,7 @@ Shader "Toaster/Volume"
         _Intensity ("Intensity", Range(0, 10)) = 1.0
         _StepCount ("Step Count", Range(8, 256)) = 64
         _Density ("Density Multiplier", Range(0, 5)) = 1.0
+        _EdgeFalloff ("Edge Falloff", Range(0, 0.5)) = 0.1
         [Toggle(_ADDITIVE_MODE)] _AdditiveMode ("Additive Blend (Emissive Glow)", Float) = 0
     }
 
@@ -40,6 +41,7 @@ Shader "Toaster/Volume"
                 float _Intensity;
                 float _StepCount;
                 float _Density;
+                float _EdgeFalloff;
             CBUFFER_END
 
             struct Attributes
@@ -126,7 +128,13 @@ Shader "Toaster/Volume"
                     float3 color = voxelData.rgb * _Intensity;
                     #endif
 
-                    float density = voxelData.a * _Density * stepSize;
+                    // Edge falloff — fade density near volume boundaries for smooth overlap
+                    float3 edgeDist = min(uvw, 1.0 - uvw); // Distance to nearest edge [0..0.5]
+                    float edgeFade = _EdgeFalloff > 0
+                        ? saturate(min(edgeDist.x, min(edgeDist.y, edgeDist.z)) / _EdgeFalloff)
+                        : 1.0;
+
+                    float density = voxelData.a * _Density * stepSize * edgeFade;
 
                     // Front-to-back blending
                     float transmittance = 1.0 - accumulatedAlpha;
