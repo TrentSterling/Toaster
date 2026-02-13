@@ -164,22 +164,23 @@ namespace Toaster
 
             // --- Phase 1: Filter eligible renderers ---
             var eligible = new List<(MeshRenderer rend, Mesh mesh)>();
+            int skipNoMesh = 0, skipToaster = 0, skipGI = 0, skipIncremental = 0;
             foreach (var rend in renderers)
             {
                 MeshFilter mf = rend.GetComponent<MeshFilter>();
-                if (mf == null || mf.sharedMesh == null) continue;
+                if (mf == null || mf.sharedMesh == null) { skipNoMesh++; continue; }
 
                 if (skipToasterShaders && rend.sharedMaterial != null &&
                     rend.sharedMaterial.shader != null &&
                     rend.sharedMaterial.shader.name.StartsWith("Toaster/"))
-                    continue;
+                    { skipToaster++; continue; }
 
 #if UNITY_EDITOR
                 if (requireContributeGI)
                 {
                     var flags = GameObjectUtility.GetStaticEditorFlags(rend.gameObject);
                     if ((flags & StaticEditorFlags.ContributeGI) == 0)
-                        continue;
+                        { skipGI++; continue; }
                 }
 #endif
 
@@ -188,7 +189,7 @@ namespace Toaster
                     int instanceId = rend.GetInstanceID();
                     int currentHash = HashRenderer(rend);
                     if (rendererHashes.TryGetValue(instanceId, out int lastHash) && lastHash == currentHash)
-                        continue;
+                        { skipIncremental++; continue; }
                     rendererHashes[instanceId] = currentHash;
                 }
 
@@ -208,7 +209,7 @@ namespace Toaster
                 Appliance.Log($"  Eligible: '{rend.name}' mesh='{mesh.name}' verts={mesh.vertexCount} tris={mesh.triangles.Length / 3} submeshes={mesh.subMeshCount} readable={mesh.isReadable}");
             }
 
-            Appliance.Log($"Filter complete: {eligible.Count} eligible objects out of {renderers.Length} total renderers.");
+            Appliance.Log($"Filter: {eligible.Count} eligible, {skipNoMesh} no mesh, {skipToaster} toaster shader, {skipGI} no ContributeGI, {skipIncremental} unchanged (incremental) — out of {renderers.Length} total.");
 
             // --- Phase 2: Merge all geometry into mega-buffers (world-space) ---
             // One upload, one bind — eliminates per-object GPU buffer churn.
