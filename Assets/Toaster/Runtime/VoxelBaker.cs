@@ -109,25 +109,34 @@ namespace Toaster
 
             Appliance.Log($"Baking voxel grid: {resX}x{resY}x{resZ} ({resX * resY * resZ} voxels)");
 
-            if (voxelGrid != null) voxelGrid.Release();
-            voxelGrid = new RenderTexture(resX, resY, 0, RenderTextureFormat.ARGBHalf);
-            voxelGrid.dimension = TextureDimension.Tex3D;
-            voxelGrid.volumeDepth = resZ;
-            voxelGrid.enableRandomWrite = true;
-            voxelGrid.filterMode = FilterMode.Bilinear;
-            voxelGrid.wrapMode = TextureWrapMode.Clamp;
-            voxelGrid.useMipMap = generateMipmaps;
-            voxelGrid.autoGenerateMips = false; // Generate after bake, not per-write
-            voxelGrid.Create();
+            // Incremental bake: reuse existing grid if resolution matches
+            bool reuseGrid = incrementalBake && voxelGrid != null && voxelGrid.IsCreated()
+                && voxelGrid.width == resX && voxelGrid.height == resY && voxelGrid.volumeDepth == resZ;
 
-            // 2. Clear the grid
-            int clearKernel = voxelizerCompute.FindKernel("ClearGrid");
-            voxelizerCompute.SetTexture(clearKernel, "VoxelGrid", voxelGrid);
-            voxelizerCompute.SetInts("GridResolution", resX, resY, resZ);
-            voxelizerCompute.Dispatch(clearKernel,
-                Mathf.CeilToInt(resX / 8f),
-                Mathf.CeilToInt(resY / 8f),
-                Mathf.CeilToInt(resZ / 8f));
+            if (!reuseGrid)
+            {
+                if (voxelGrid != null) voxelGrid.Release();
+                voxelGrid = new RenderTexture(resX, resY, 0, RenderTextureFormat.ARGBHalf);
+                voxelGrid.dimension = TextureDimension.Tex3D;
+                voxelGrid.volumeDepth = resZ;
+                voxelGrid.enableRandomWrite = true;
+                voxelGrid.filterMode = FilterMode.Bilinear;
+                voxelGrid.wrapMode = TextureWrapMode.Clamp;
+                voxelGrid.useMipMap = generateMipmaps;
+                voxelGrid.autoGenerateMips = false; // Generate after bake, not per-write
+                voxelGrid.Create();
+
+                // 2. Clear the grid (full bake only — incremental preserves existing data)
+                int clearKernel = voxelizerCompute.FindKernel("ClearGrid");
+                voxelizerCompute.SetTexture(clearKernel, "VoxelGrid", voxelGrid);
+                voxelizerCompute.SetInt("GridResX", resX);
+                voxelizerCompute.SetInt("GridResY", resY);
+                voxelizerCompute.SetInt("GridResZ", resZ);
+                voxelizerCompute.Dispatch(clearKernel,
+                    Mathf.CeilToInt(resX / 8f),
+                    Mathf.CeilToInt(resY / 8f),
+                    Mathf.CeilToInt(resZ / 8f));
+            }
 
             // 2b. Create and clear atomic accumulation buffer (4 uints per voxel: R, G, B, Count)
             int totalVoxels = resX * resY * resZ;
@@ -135,7 +144,9 @@ namespace Toaster
 
             int clearAccumKernel = voxelizerCompute.FindKernel("ClearAccum");
             voxelizerCompute.SetBuffer(clearAccumKernel, "AccumBuffer", accumBuffer);
-            voxelizerCompute.SetInts("GridResolution", resX, resY, resZ);
+            voxelizerCompute.SetInt("GridResX", resX);
+            voxelizerCompute.SetInt("GridResY", resY);
+            voxelizerCompute.SetInt("GridResZ", resZ);
             voxelizerCompute.Dispatch(clearAccumKernel,
                 Mathf.CeilToInt(totalVoxels * 4 / 64f), 1, 1);
 
@@ -153,7 +164,9 @@ namespace Toaster
             voxelizerCompute.SetBuffer(kernel, "AccumBuffer", accumBuffer);
             voxelizerCompute.SetVector("WorldBoundsMin", worldMin);
             voxelizerCompute.SetFloat("VoxelSize", voxelSize);
-            voxelizerCompute.SetInts("GridResolution", resX, resY, resZ);
+            voxelizerCompute.SetInt("GridResX", resX);
+            voxelizerCompute.SetInt("GridResY", resY);
+            voxelizerCompute.SetInt("GridResZ", resZ);
 
             int objectCount = 0;
             int triangleCount = 0;
@@ -192,6 +205,20 @@ namespace Toaster
 
                 Mesh mesh = mf.sharedMesh;
 
+                // Guard: mesh must be readable to access vertex data on CPU
+                if (!mesh.isReadable)
+                {
+                    Appliance.LogWarning($"Mesh '{mesh.name}' is not readable (enable Read/Write in import settings). Skipping.");
+                    continue;
+                }
+
+                // Guard: renderer must have at least one material
+                if (rend.sharedMaterials.Length == 0)
+                {
+                    Appliance.LogWarning($"Renderer '{rend.name}' has no materials. Skipping.");
+                    continue;
+                }
+
                 UploadMeshData(mesh);
                 voxelizerCompute.SetBuffer(kernel, "Vertices", vertBuffer);
                 voxelizerCompute.SetBuffer(kernel, "Normals", normalBuffer);
@@ -202,6 +229,7 @@ namespace Toaster
                 for (int i = 0; i < mesh.subMeshCount; i++)
                 {
                     Material mat = rend.sharedMaterials[Mathf.Min(i, rend.sharedMaterials.Length - 1)];
+                    if (mat == null) continue;
 
                     int metaPass = mat.FindPass("Meta");
                     if (metaPass == -1)
@@ -270,7 +298,9 @@ namespace Toaster
             int finalizeKernel = voxelizerCompute.FindKernel("FinalizeGrid");
             voxelizerCompute.SetTexture(finalizeKernel, "VoxelGrid", voxelGrid);
             voxelizerCompute.SetBuffer(finalizeKernel, "AccumBuffer", accumBuffer);
-            voxelizerCompute.SetInts("GridResolution", resX, resY, resZ);
+            voxelizerCompute.SetInt("GridResX", resX);
+            voxelizerCompute.SetInt("GridResY", resY);
+            voxelizerCompute.SetInt("GridResZ", resZ);
             voxelizerCompute.Dispatch(finalizeKernel,
                 Mathf.CeilToInt(resX / 8f),
                 Mathf.CeilToInt(resY / 8f),

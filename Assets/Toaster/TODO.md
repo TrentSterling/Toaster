@@ -1,17 +1,23 @@
 # Toaster TODO
 
-## Current Status: v0.6 (Crumb)
+## Current Status: v0.7 (Crumb)
 Working: Full pipeline — Material bake (Meta Pass) + GPU voxelization + path tracer + volume raymarcher + 6 debug visualizers + editor window + Shader Graph integration.
 
 ---
 
-## Completed (v0.1 → v0.6)
+## Completed (v0.1 → v0.7)
 
 ### Bug Fixes
 - [x] Meta Pass UV1 support — injects UV1 = UV0 for readable meshes without lightmap UVs, _BaseColor fill fallback
 - [x] Object filtering — skips Toaster/* shader materials and objects without ContributeGI static flag
 - [x] Race conditions on voxel writes — atomic accumulation buffer (InterlockedAdd on fixed-point RGBA), FinalizeGrid kernel averages
 - [x] Voxel grid serialized as Texture3D asset, survives domain reloads
+- [x] SetInts GridResolution CBUFFER packing — replaced with per-component SetInt + #define alias to avoid 16-byte padding ambiguity
+- [x] mesh.isReadable guard — skip non-readable meshes with warning instead of crashing
+- [x] sharedMaterials empty array guard — skip renderers with no materials
+- [x] Null material slot guard — skip null entries in sharedMaterials array
+- [x] Incremental bake fix — no longer clears the grid when reusing existing data, preserves unchanged objects' voxels
+- [x] HLSL `sample` variable renamed to `texSample` — avoids shadowing reserved keyword
 
 ### Polish
 - [x] Point cloud visualizer — Graphics.DrawProcedural, no mesh needed

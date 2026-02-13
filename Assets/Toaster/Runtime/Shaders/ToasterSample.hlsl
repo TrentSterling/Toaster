@@ -41,9 +41,9 @@ void ToasterSampleVolume_float(
     // Clamp UVW to [0,1] to prevent sampling outside the grid
     uvw = saturate(uvw);
 
-    float4 sample = SAMPLE_TEXTURE3D_LOD(VolumeTex, VolumeSampler, uvw, LOD);
-    Color = sample.rgb;
-    Density = sample.a;
+    float4 texSample = SAMPLE_TEXTURE3D_LOD(VolumeTex, VolumeSampler, uvw, LOD);
+    Color = texSample.rgb;
+    Density = texSample.a;
 }
 
 // Half-precision version (for mobile / performance)
@@ -59,9 +59,9 @@ void ToasterSampleVolume_half(
 {
     half3 uvw = (WorldPos - BoundsMin) / (BoundsMax - BoundsMin);
     uvw = saturate(uvw);
-    half4 sample = SAMPLE_TEXTURE3D_LOD(VolumeTex, VolumeSampler, uvw, LOD);
-    Color = sample.rgb;
-    Density = sample.a;
+    half4 texSample = SAMPLE_TEXTURE3D_LOD(VolumeTex, VolumeSampler, uvw, LOD);
+    Color = texSample.rgb;
+    Density = texSample.a;
 }
 
 // --- ToasterSampleLighting ---
@@ -78,9 +78,9 @@ void ToasterSampleLighting_float(
 {
     float3 uvw = (WorldPos - BoundsMin) / (BoundsMax - BoundsMin);
     uvw = saturate(uvw);
-    float4 sample = SAMPLE_TEXTURE3D_LOD(LightingTex, LightingSampler, uvw, LOD);
-    LightColor = sample.rgb;
-    Density = sample.a;
+    float4 texSample = SAMPLE_TEXTURE3D_LOD(LightingTex, LightingSampler, uvw, LOD);
+    LightColor = texSample.rgb;
+    Density = texSample.a;
 }
 
 void ToasterSampleLighting_half(
@@ -95,9 +95,9 @@ void ToasterSampleLighting_half(
 {
     half3 uvw = (WorldPos - BoundsMin) / (BoundsMax - BoundsMin);
     uvw = saturate(uvw);
-    half4 sample = SAMPLE_TEXTURE3D_LOD(LightingTex, LightingSampler, uvw, LOD);
-    LightColor = sample.rgb;
-    Density = sample.a;
+    half4 texSample = SAMPLE_TEXTURE3D_LOD(LightingTex, LightingSampler, uvw, LOD);
+    LightColor = texSample.rgb;
+    Density = texSample.a;
 }
 
 // --- ToasterSampleFog ---
@@ -122,9 +122,9 @@ void ToasterSampleFog_float(
         return;
     }
 
-    float4 sample = SAMPLE_TEXTURE3D_LOD(VolumeTex, VolumeSampler, uvw, 0);
-    float3 color = sample.rgb * Intensity;
-    float density = saturate(sample.a * DensityMultiplier);
+    float4 texSample = SAMPLE_TEXTURE3D_LOD(VolumeTex, VolumeSampler, uvw, 0);
+    float3 color = texSample.rgb * Intensity;
+    float density = saturate(texSample.a * DensityMultiplier);
 
     FogColorAlpha = float4(color * density, density);
 }
@@ -147,9 +147,9 @@ void ToasterSampleFog_half(
         return;
     }
 
-    half4 sample = SAMPLE_TEXTURE3D_LOD(VolumeTex, VolumeSampler, uvw, 0);
-    half3 color = sample.rgb * Intensity;
-    half density = saturate(sample.a * DensityMultiplier);
+    half4 texSample = SAMPLE_TEXTURE3D_LOD(VolumeTex, VolumeSampler, uvw, 0);
+    half3 color = texSample.rgb * Intensity;
+    half density = saturate(texSample.a * DensityMultiplier);
 
     FogColorAlpha = half4(color * density, density);
 }

@@ -23,7 +23,10 @@ RWStructuredBuffer<uint> AccumBuffer;
 float4x4 LocalToWorld;
 float3 WorldBoundsMin;
 float VoxelSize;
-int3 GridResolution;
+int GridResX;
+int GridResY;
+int GridResZ;
+#define GridResolution int3(GridResX, GridResY, GridResZ)
 int IndexOffset;
 int TriangleCount;
 

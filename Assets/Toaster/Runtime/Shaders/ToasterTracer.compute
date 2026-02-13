@@ -7,7 +7,10 @@ RWTexture3D<float4> LightingGrid;   // Output: accumulated light per voxel
 SamplerState samplerAlbedoGrid;
 
 // --- Grid setup ---
-int3 GridResolution;
+int GridResX;
+int GridResY;
+int GridResZ;
+#define GridResolution int3(GridResX, GridResY, GridResZ)
 float3 WorldBoundsMin;
 float3 WorldBoundsMax;
 float VoxelSize;

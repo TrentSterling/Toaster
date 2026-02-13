@@ -98,7 +98,7 @@ Assets/Toaster/
 
 ## Status
 
-**v0.6 (Crumb)** — Full pipeline working. See [TODO.md](Assets/Toaster/TODO.md) for remaining work and [FUTURE.md](Assets/Toaster/FUTURE.md) for advanced techniques research (brickmaps, radiance cascades, froxels, etc).
+**v0.7 (Crumb)** — Full pipeline working + audit hardening. See [TODO.md](Assets/Toaster/TODO.md) for remaining work and [FUTURE.md](Assets/Toaster/FUTURE.md) for advanced techniques research (brickmaps, radiance cascades, froxels, etc).
 
 ## License
 

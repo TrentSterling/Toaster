@@ -87,7 +87,9 @@ namespace Toaster
             // Clear lighting grid
             int clearKernel = tracerCompute.FindKernel("ClearLighting");
             tracerCompute.SetTexture(clearKernel, "LightingGrid", lightingGrid);
-            tracerCompute.SetInts("GridResolution", resX, resY, resZ);
+            tracerCompute.SetInt("GridResX", resX);
+            tracerCompute.SetInt("GridResY", resY);
+            tracerCompute.SetInt("GridResZ", resZ);
             tracerCompute.Dispatch(clearKernel,
                 Mathf.CeilToInt(resX / 8f),
                 Mathf.CeilToInt(resY / 8f),
@@ -103,7 +105,9 @@ namespace Toaster
             tracerCompute.SetVector("WorldBoundsMin", worldMin);
             tracerCompute.SetVector("WorldBoundsMax", worldMax);
             tracerCompute.SetFloat("VoxelSize", baker.voxelSize);
-            tracerCompute.SetInts("GridResolution", resX, resY, resZ);
+            tracerCompute.SetInt("GridResX", resX);
+            tracerCompute.SetInt("GridResY", resY);
+            tracerCompute.SetInt("GridResZ", resZ);
             tracerCompute.SetInt("RaysPerVoxel", raysPerVoxel);
             tracerCompute.SetInt("MaxBounces", maxBounces);
             tracerCompute.SetFloat("LightFalloff", lightFalloff);
