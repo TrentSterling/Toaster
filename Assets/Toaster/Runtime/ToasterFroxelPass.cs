@@ -79,6 +79,8 @@ namespace Toaster
         static readonly int s_CameraPos = Shader.PropertyToID("_CameraPos");
         static readonly int s_CamForward = Shader.PropertyToID("_CamForward");
         static readonly int s_FroxelTex = Shader.PropertyToID("_FroxelTex");
+        static readonly int s_FroxelScatterTex = Shader.PropertyToID("_FroxelScatterTex");
+        static readonly int s_FroxelDebugMode = Shader.PropertyToID("_FroxelDebugMode");
 
         static readonly string[] s_VolumeGridNames = new string[]
         {
@@ -355,13 +357,16 @@ namespace Toaster
                 1);
         }
 
-        void SetApplyMaterialProperties(RenderTexture integratedRT)
+        void SetApplyMaterialProperties(RenderTexture integratedRT, RenderTexture scatteringRT)
         {
             m_ApplyMaterial.SetTexture(s_FroxelTex, integratedRT);
             m_ApplyMaterial.SetFloat(s_FroxelNear, m_Settings.nearPlane);
             m_ApplyMaterial.SetFloat(s_FroxelFar, m_Settings.maxDistance);
             m_ApplyMaterial.SetFloat(s_DepthUniformity, m_Settings.depthUniformity);
             m_ApplyMaterial.SetInt(s_FroxelResZ, m_Settings.froxelResolution.z);
+            m_ApplyMaterial.SetInt(s_FroxelDebugMode, (int)m_Settings.debugMode);
+            if (scatteringRT != null)
+                m_ApplyMaterial.SetTexture(s_FroxelScatterTex, scatteringRT);
         }
 
         // ============================================================
@@ -412,7 +417,7 @@ namespace Toaster
             DispatchCompute(cmd, scatteringRT, integratedRT, historyRT, invViewProj, cam.transform.position, cam.transform.forward);
 
             // Apply fullscreen
-            SetApplyMaterialProperties(integratedRT);
+            SetApplyMaterialProperties(integratedRT, scatteringRT);
             cmd.DrawProcedural(Matrix4x4.identity, m_ApplyMaterial, 0, MeshTopology.Triangles, 3);
 
             context.ExecuteCommandBuffer(cmd);
@@ -471,6 +476,7 @@ namespace Toaster
             public Material applyMaterial;
             public ToasterFroxelFeature.Settings settings;
             public RTHandle integratedRT;
+            public RTHandle scatteringRT;
         }
 
         public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
@@ -563,9 +569,11 @@ namespace Toaster
                 passData.applyMaterial = m_ApplyMaterial;
                 passData.settings = m_Settings;
                 passData.integratedRT = m_FroxelIntegrated;
+                passData.scatteringRT = m_FroxelScattering;
 
-                // Read the integrated froxel texture
+                // Read the integrated froxel texture + scattering (for debug modes)
                 builder.UseTexture(integratedHandle);
+                builder.UseTexture(scatteringHandle);
 
                 // Bind camera color as render target, depth for reading
                 builder.SetRenderAttachment(resourceData.activeColorTexture, 0);
@@ -585,6 +593,9 @@ namespace Toaster
                     mat.SetFloat(s_FroxelFar, data.settings.maxDistance);
                     mat.SetFloat(s_DepthUniformity, data.settings.depthUniformity);
                     mat.SetInt(s_FroxelResZ, data.settings.froxelResolution.z);
+                    mat.SetInt(s_FroxelDebugMode, (int)data.settings.debugMode);
+                    if (data.scatteringRT?.rt != null)
+                        mat.SetTexture(s_FroxelScatterTex, data.scatteringRT.rt);
 
                     ctx.cmd.DrawProcedural(Matrix4x4.identity, mat, 0, MeshTopology.Triangles, 3);
                 });

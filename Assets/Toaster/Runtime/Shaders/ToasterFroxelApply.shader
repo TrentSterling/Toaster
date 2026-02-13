@@ -27,11 +27,18 @@ Shader "Toaster/FroxelApply"
             Texture3D<float4> _FroxelTex;
             SamplerState sampler_FroxelTex;
 
+            // Scattering texture (for debug modes that need raw scatter data)
+            Texture3D<float4> _FroxelScatterTex;
+            SamplerState sampler_FroxelScatterTex;
+
             // Depth distribution params (must match compute)
             float _FroxelNear;
             float _FroxelFar;
             float _DepthUniformity;
             int _FroxelResZ;
+
+            // Debug: 0=off, 1=scattering RGB, 2=extinction, 3=transmittance, 4=depth slices
+            int _FroxelDebugMode;
 
             struct Varyings
             {
@@ -68,6 +75,23 @@ Shader "Toaster/FroxelApply"
                 return saturate(t) * (float)_FroxelResZ;
             }
 
+            // Hue-based colormap for debug visualizations
+            float3 DebugHeatmap(float t)
+            {
+                // Blue → Cyan → Green → Yellow → Red
+                float3 c;
+                t = saturate(t);
+                if (t < 0.25)
+                    c = lerp(float3(0, 0, 1), float3(0, 1, 1), t * 4.0);
+                else if (t < 0.5)
+                    c = lerp(float3(0, 1, 1), float3(0, 1, 0), (t - 0.25) * 4.0);
+                else if (t < 0.75)
+                    c = lerp(float3(0, 1, 0), float3(1, 1, 0), (t - 0.5) * 4.0);
+                else
+                    c = lerp(float3(1, 1, 0), float3(1, 0, 0), (t - 0.75) * 4.0);
+                return c;
+            }
+
             half4 frag(Varyings input) : SV_Target
             {
                 float2 uv = input.uv;
@@ -85,6 +109,39 @@ Shader "Toaster/FroxelApply"
                 // Sample froxel grid — UVW coordinates
                 float3 uvw = float3(uv.x, uv.y, slice / (float)_FroxelResZ);
                 float4 fog = _FroxelTex.SampleLevel(sampler_FroxelTex, uvw, 0);
+
+                // Debug modes — replace output with diagnostic visualization
+                if (_FroxelDebugMode > 0)
+                {
+                    float3 debugColor = float3(0, 0, 0);
+
+                    if (_FroxelDebugMode == 1) // Scattering RGB
+                    {
+                        float4 scatter = _FroxelScatterTex.SampleLevel(sampler_FroxelScatterTex, uvw, 0);
+                        debugColor = scatter.rgb;
+                    }
+                    else if (_FroxelDebugMode == 2) // Extinction (density)
+                    {
+                        float4 scatter = _FroxelScatterTex.SampleLevel(sampler_FroxelScatterTex, uvw, 0);
+                        debugColor = DebugHeatmap(scatter.a * 10.0); // scale up for visibility
+                    }
+                    else if (_FroxelDebugMode == 3) // Transmittance
+                    {
+                        debugColor = DebugHeatmap(1.0 - fog.a); // 0=clear, 1=opaque
+                    }
+                    else if (_FroxelDebugMode == 4) // Depth slices
+                    {
+                        float sliceNorm = slice / (float)_FroxelResZ;
+                        debugColor = DebugHeatmap(sliceNorm);
+                        // Grid lines at slice boundaries
+                        float sliceFrac = frac(slice);
+                        if (sliceFrac < 0.05 || sliceFrac > 0.95)
+                            debugColor = float3(1, 1, 1);
+                    }
+
+                    // Debug replaces the scene entirely (Blend One SrcAlpha, a=0 kills scene)
+                    return half4(debugColor, 0.0);
+                }
 
                 // fog.rgb = accumulated in-scattered light
                 // fog.a = remaining transmittance

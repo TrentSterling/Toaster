@@ -6,6 +6,15 @@ namespace Toaster
 {
     public class ToasterFroxelFeature : ScriptableRendererFeature
     {
+        public enum DebugMode
+        {
+            Off = 0,
+            Scattering = 1,
+            Extinction = 2,
+            Transmittance = 3,
+            DepthSlices = 4
+        }
+
         [System.Serializable]
         public class Settings
         {
@@ -52,6 +61,10 @@ namespace Toaster
             [Tooltip("Temporal blend weight. Lower = more history (smoother but ghostier). 0.05 = 95% history.")]
             [Range(0.01f, 1f)]
             public float temporalBlendAlpha = 0.05f;
+
+            [Header("Debug")]
+            [Tooltip("Debug visualization mode. Off = normal fog compositing.")]
+            public DebugMode debugMode = DebugMode.Off;
         }
 
         [Header("Settings")]

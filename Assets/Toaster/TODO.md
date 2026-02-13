@@ -1,7 +1,7 @@
 # Toaster TODO
 
-## Current Status: v0.9 (Crumb)
-Working: Full pipeline — Material bake (Meta Pass + emission) + GPU voxelization + path tracer + volume raymarcher + 6 debug visualizers + editor window + Shader Graph integration + froxel volumetric fog with direct scene lighting.
+## Current Status: v1.0 (Crumb)
+Working: Full pipeline — Material bake (Meta Pass + emission) + GPU voxelization + path tracer + volume raymarcher + 6 debug visualizers + editor window + Shader Graph integration + froxel volumetric fog with direct scene lighting + multi-volume blending + froxel debug views.
 
 ---
 
@@ -49,11 +49,11 @@ Working: Full pipeline — Material bake (Meta Pass + emission) + GPU voxelizati
 ## v1.0 Sprint — Polish + Quality
 
 ### Critical (must work before calling it done)
-- [ ] Temporal keyword toggle — enable/disable TEMPORAL_REPROJECTION multi_compile at runtime
+- [x] Temporal keyword toggle — enable/disable TEMPORAL_REPROJECTION multi_compile at runtime
 
 ### Froxel Quality
 - [ ] Height fog falloff — remap world Y between base/max height with sqrt density curve
-- [ ] Froxel debug visualizer — 3D texture slice viewer for FroxelScattering/Integrated
+- [x] Froxel debug visualizer — 5 modes (off/scattering/extinction/transmittance/depth slices) in apply shader
 - [ ] Exposure/tonemapping on fog — HDR fog values can blow out, need soft clamp
 - [ ] Shadow rays for scene lights in fog — occlude light contribution behind solid geometry
 - [ ] Light cookie support — project light cookies into froxel injection
@@ -64,7 +64,7 @@ Working: Full pipeline — Material bake (Meta Pass + emission) + GPU voxelizati
 - [ ] Anti-aliased voxelization — partial coverage for voxels on geometry edges
 
 ### Editor / Tools
-- [ ] Froxel settings in editor window — expose froxel resolution, depth params, fog density in Baker Window
+- [x] Froxel settings in editor window — inline quick settings for density, intensity, ambient, scatter, temporal
 - [ ] One-click froxel setup — button in editor window to add feature to active renderer
 - [ ] Progress bar for bake (via `EditorUtility.DisplayProgressBar`)
 - [ ] Undo support for bake operations
@@ -84,7 +84,7 @@ Working: Full pipeline — Material bake (Meta Pass + emission) + GPU voxelizati
 - [ ] Particle fog injection — let particle systems contribute density to froxels
 
 ### Demo Scene
-- [ ] Add second overlapping volume — test multi-volume blending in corridor
+- [x] Add second overlapping volume — courtyard area beyond doorway, 3m overlap zone with edge falloff
 - [ ] Add moving light — test temporal reprojection stability
 - [ ] Camera fly-through path — scripted camera for consistent testing
 - [ ] Before/after toggle — switch between raymarcher and froxel fog for comparison

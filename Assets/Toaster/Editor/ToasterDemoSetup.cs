@@ -198,32 +198,56 @@ namespace Toaster
             }
 
             // ============================================================
-            // Toaster Baker — bounds cover the whole corridor
+            // Courtyard area — beyond the back doorway (cool blue/green)
+            // Overlaps with corridor by ~3m for volume blending test
             // ============================================================
-            var bakerGO = new GameObject("Toaster Baker");
-            var baker = bakerGO.AddComponent<VoxelBaker>();
-            baker.boundsSize = new Vector3(16, 8, 24);
-            baker.voxelSize = 0.25f;
-            bakerGO.transform.position = new Vector3(0, 3, 1);
+            // Courtyard ground
+            CreatePrimitive("Courtyard Floor", PrimitiveType.Plane, new Vector3(0, 0, 20),
+                new Vector3(2.5f, 1, 2), lightConcrete);
 
+            // Low walls / planters
+            CreatePrimitive("Planter Left", PrimitiveType.Cube, new Vector3(-8, 1, 20),
+                new Vector3(0.8f, 2, 12), lightConcrete);
+            CreatePrimitive("Planter Right", PrimitiveType.Cube, new Vector3(8, 1, 20),
+                new Vector3(0.8f, 2, 12), lightConcrete);
+
+            // Central fountain pedestal
+            CreatePrimitive("Fountain Base", PrimitiveType.Cylinder, new Vector3(0, 0.6f, 20),
+                new Vector3(2.5f, 0.6f, 2.5f), lightConcrete);
+            CreatePrimitive("Fountain Pillar", PrimitiveType.Cylinder, new Vector3(0, 2.0f, 20),
+                new Vector3(0.4f, 1.4f, 0.4f), lightConcrete);
+            CreatePrimitive("Fountain Top", PrimitiveType.Sphere, new Vector3(0, 3.2f, 20),
+                new Vector3(1.2f, 0.6f, 1.2f), lightConcrete);
+
+            // Tall lamp posts with colored lights
+            CreatePrimitive("Lamp Post L", PrimitiveType.Cylinder, new Vector3(-4, 2.5f, 17),
+                new Vector3(0.15f, 2.5f, 0.15f), metalDark);
+            CreatePrimitive("Lamp Post R", PrimitiveType.Cylinder, new Vector3(4, 2.5f, 23),
+                new Vector3(0.15f, 2.5f, 0.15f), metalDark);
+
+            // Courtyard emissive — blue glow on fountain
+            var blueEmissive = CreateEmissiveMaterial(urpLit, "BlueEmissive_Mat", Color.black, new Color(0.2f, 0.5f, 4f));
+            CreatePrimitive("Fountain Glow", PrimitiveType.Cylinder, new Vector3(0, 0.05f, 20),
+                new Vector3(3f, 0.05f, 3f), blueEmissive);
+
+            // Courtyard lights — cool tones contrast with warm corridor
+            CreatePointLight("Blue Lamp L", new Vector3(-4, 5.2f, 17), new Color(0.2f, 0.4f, 1f), 14f, 5f);
+            CreatePointLight("Teal Lamp R", new Vector3(4, 5.2f, 23), new Color(0.1f, 0.9f, 0.7f), 14f, 5f);
+            CreatePointLight("Fountain Blue", new Vector3(0, 1.5f, 20), new Color(0.1f, 0.3f, 1f), 8f, 3f);
+
+            // Archway columns at the transition zone
+            CreatePrimitive("Arch Pillar OL", PrimitiveType.Cylinder, new Vector3(-3, 3, 12),
+                new Vector3(0.5f, 3f, 0.5f), darkConcrete);
+            CreatePrimitive("Arch Pillar OR", PrimitiveType.Cylinder, new Vector3(3, 3, 12),
+                new Vector3(0.5f, 3f, 0.5f), darkConcrete);
+            CreatePrimitive("Arch Beam Outer", PrimitiveType.Cube, new Vector3(0, 5.8f, 12),
+                new Vector3(7f, 0.4f, 0.6f), darkConcrete);
+
+            // ============================================================
+            // Shared resources
+            // ============================================================
             var computeShader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
-            if (computeShader != null)
-                baker.voxelizerCompute = computeShader;
-            else
-                Appliance.LogWarning($"Could not find compute shader at {ComputeShaderPath}. Assign manually.");
-
-            // --- Toaster Tracer ---
-            var tracer = bakerGO.AddComponent<ToasterTracer>();
-            tracer.baker = baker;
-            tracer.raysPerVoxel = 64;
-            tracer.maxBounces = 3;
             var tracerCompute = AssetDatabase.LoadAssetAtPath<ComputeShader>(TracerComputePath);
-            if (tracerCompute != null)
-                tracer.tracerCompute = tracerCompute;
-            else
-                Appliance.LogWarning($"Could not find tracer compute at {TracerComputePath}. Assign manually.");
-
-            // --- Fog Volume ---
             Material volumeMat = null;
             var volumeShader = AssetDatabase.LoadAssetAtPath<Shader>(VolumeShaderPath);
             if (volumeShader != null)
@@ -232,8 +256,30 @@ namespace Toaster
                 volumeMat.name = "ToasterVolume_Mat";
             }
 
+            // ============================================================
+            // Baker 1 — Corridor interior (warm)
+            // Covers z=-11 to z=13
+            // ============================================================
+            var bakerGO = new GameObject("Toaster Baker (Corridor)");
+            var baker = bakerGO.AddComponent<VoxelBaker>();
+            baker.boundsSize = new Vector3(16, 8, 24);
+            baker.voxelSize = 0.25f;
+            bakerGO.transform.position = new Vector3(0, 3, 1);
+
+            if (computeShader != null)
+                baker.voxelizerCompute = computeShader;
+            else
+                Appliance.LogWarning($"Could not find compute shader at {ComputeShaderPath}. Assign manually.");
+
+            var tracer = bakerGO.AddComponent<ToasterTracer>();
+            tracer.baker = baker;
+            tracer.raysPerVoxel = 64;
+            tracer.maxBounces = 3;
+            if (tracerCompute != null)
+                tracer.tracerCompute = tracerCompute;
+
             var fogVolumeGO = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            fogVolumeGO.name = "Fog Volume";
+            fogVolumeGO.name = "Fog Volume (Corridor)";
             fogVolumeGO.transform.position = bakerGO.transform.position;
             fogVolumeGO.transform.localScale = baker.boundsSize;
             Object.DestroyImmediate(fogVolumeGO.GetComponent<BoxCollider>());
@@ -241,7 +287,47 @@ namespace Toaster
                 fogVolumeGO.GetComponent<MeshRenderer>().sharedMaterial = volumeMat;
             var toasterVol = fogVolumeGO.AddComponent<ToasterVolume>();
             toasterVol.baker = baker;
+            toasterVol.edgeFalloff = 0.15f;
             GameObjectUtility.SetStaticEditorFlags(fogVolumeGO, 0);
+
+            // ============================================================
+            // Baker 2 — Courtyard exterior (cool)
+            // Covers z=10 to z=26 (overlaps corridor z=10..13)
+            // ============================================================
+            var baker2GO = new GameObject("Toaster Baker (Courtyard)");
+            var baker2 = baker2GO.AddComponent<VoxelBaker>();
+            baker2.boundsSize = new Vector3(20, 10, 16);
+            baker2.voxelSize = 0.25f;
+            baker2GO.transform.position = new Vector3(0, 4, 18);
+
+            if (computeShader != null)
+                baker2.voxelizerCompute = computeShader;
+
+            var tracer2 = baker2GO.AddComponent<ToasterTracer>();
+            tracer2.baker = baker2;
+            tracer2.raysPerVoxel = 64;
+            tracer2.maxBounces = 3;
+            if (tracerCompute != null)
+                tracer2.tracerCompute = tracerCompute;
+
+            Material volumeMat2 = null;
+            if (volumeShader != null)
+            {
+                volumeMat2 = new Material(volumeShader);
+                volumeMat2.name = "ToasterVolume2_Mat";
+            }
+
+            var fogVolume2GO = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            fogVolume2GO.name = "Fog Volume (Courtyard)";
+            fogVolume2GO.transform.position = baker2GO.transform.position;
+            fogVolume2GO.transform.localScale = baker2.boundsSize;
+            Object.DestroyImmediate(fogVolume2GO.GetComponent<BoxCollider>());
+            if (volumeMat2 != null)
+                fogVolume2GO.GetComponent<MeshRenderer>().sharedMaterial = volumeMat2;
+            var toasterVol2 = fogVolume2GO.AddComponent<ToasterVolume>();
+            toasterVol2.baker = baker2;
+            toasterVol2.edgeFalloff = 0.15f;
+            GameObjectUtility.SetStaticEditorFlags(fogVolume2GO, 0);
 
             // ============================================================
             // Debug visualizers (offset to the side)
@@ -332,12 +418,12 @@ namespace Toaster
             GameObjectUtility.SetStaticEditorFlags(pointCloudGO, 0);
 
             // ============================================================
-            // Bake
+            // Bake both volumes
             // ============================================================
             if (bakeImmediately)
             {
+                // Bake corridor
                 baker.Bake();
-
                 if (baker.voxelGrid != null)
                 {
                     Material[] vizMats = { volumeMat, debugMat, heatmapMat, isoMat, multiSliceMat };
@@ -355,19 +441,31 @@ namespace Toaster
                         if (tracer.lightingGrid != null && volumeMat != null)
                             volumeMat.SetTexture("_VolumeTex", tracer.lightingGrid);
                     }
-
-                    Appliance.Log("Demo scene created, baked, and traced! Visualizers wired.");
                 }
+
+                // Bake courtyard
+                baker2.Bake();
+                if (baker2.voxelGrid != null)
+                {
+                    if (tracer2.tracerCompute != null)
+                    {
+                        tracer2.Trace();
+                        if (tracer2.lightingGrid != null && volumeMat2 != null)
+                            volumeMat2.SetTexture("_VolumeTex", tracer2.lightingGrid);
+                    }
+                }
+
+                Appliance.Log("Demo scene created with 2 volumes, baked, and traced! Visualizers wired.");
             }
             else
             {
-                Appliance.Log("Demo scene created. Select 'Toaster Baker' and use context menu > Bake Voxels.");
+                Appliance.Log("Demo scene created with 2 volumes. Select bakers and use Bake Voxels.");
             }
 
-            // Focus scene view on the corridor
+            // Focus scene view on the transition zone between volumes
             if (SceneView.lastActiveSceneView != null)
             {
-                SceneView.lastActiveSceneView.LookAt(new Vector3(0, 3, 1), Quaternion.Euler(15, 0, 0), 20f);
+                SceneView.lastActiveSceneView.LookAt(new Vector3(0, 4, 10), Quaternion.Euler(20, 0, 0), 25f);
             }
         }
 

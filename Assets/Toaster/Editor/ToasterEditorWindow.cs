@@ -264,6 +264,9 @@ namespace Toaster
                 if (s.enableTemporal)
                     s.temporalBlendAlpha = EditorGUILayout.Slider("  Blend Alpha", s.temporalBlendAlpha, 0.01f, 1f);
 
+                EditorGUILayout.Space(2);
+                s.debugMode = (ToasterFroxelFeature.DebugMode)EditorGUILayout.EnumPopup("Debug View", s.debugMode);
+
                 if (EditorGUI.EndChangeCheck())
                     EditorUtility.SetDirty(froxelFeature);
 
