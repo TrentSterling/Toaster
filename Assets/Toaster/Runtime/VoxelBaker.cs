@@ -260,8 +260,8 @@ namespace Toaster
                 objectCount++;
             }
 
-            // Release pooled mesh buffers after all objects are processed
-            ReleaseBuffers();
+            // Release pooled mesh buffers (but NOT accumBuffer — needed for FinalizeGrid)
+            ReleaseMeshBuffers();
 
             RenderTexture.ReleaseTemporary(metaTempRT);
             cmd.Release();
@@ -358,6 +358,14 @@ namespace Toaster
                 return; // Reuse — existing buffer is large enough
             if (buffer != null) buffer.Release();
             buffer = new ComputeBuffer(count, stride);
+        }
+
+        void ReleaseMeshBuffers()
+        {
+            if (vertBuffer != null) { vertBuffer.Release(); vertBuffer = null; }
+            if (normalBuffer != null) { normalBuffer.Release(); normalBuffer = null; }
+            if (uvBuffer != null) { uvBuffer.Release(); uvBuffer = null; }
+            if (indexBuffer != null) { indexBuffer.Release(); indexBuffer = null; }
         }
 
         void ReleaseBuffers()
