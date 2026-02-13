@@ -10,6 +10,10 @@ namespace Toaster
         private const string ComputeShaderPath = "Assets/Toaster/Runtime/Shaders/Voxelizer.compute";
         private const string VolumeShaderPath = "Assets/Toaster/Runtime/Shaders/ToasterVolume.shader";
         private const string DebugSliceShaderPath = "Assets/Toaster/Runtime/Shaders/ToasterDebugSlice.shader";
+        private const string HeatmapShaderPath = "Assets/Toaster/Runtime/Shaders/ToasterDebugHeatmap.shader";
+        private const string IsosurfaceShaderPath = "Assets/Toaster/Runtime/Shaders/ToasterDebugIsosurface.shader";
+        private const string MultiSliceShaderPath = "Assets/Toaster/Runtime/Shaders/ToasterDebugMultiSlice.shader";
+        private const string PointCloudShaderPath = "Assets/Toaster/Runtime/Shaders/ToasterDebugPointCloud.shader";
 
         [MenuItem("Toaster/Create Demo Scene")]
         public static void CreateDemoScene()
@@ -137,20 +141,76 @@ namespace Toaster
                 debugQuadGO.GetComponent<MeshRenderer>().sharedMaterial = debugMat;
             GameObjectUtility.SetStaticEditorFlags(debugQuadGO, 0);
 
+            // --- Debug Heatmap Quad ---
+            Material heatmapMat = null;
+            var heatmapShader = AssetDatabase.LoadAssetAtPath<Shader>(HeatmapShaderPath);
+            if (heatmapShader != null)
+            {
+                heatmapMat = new Material(heatmapShader);
+                heatmapMat.name = "ToasterHeatmap_Mat";
+            }
+
+            var heatmapQuadGO = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            heatmapQuadGO.name = "Debug Heatmap";
+            heatmapQuadGO.transform.position = new Vector3(8, 4, 7);
+            heatmapQuadGO.transform.localScale = new Vector3(6, 4, 1);
+            Object.DestroyImmediate(heatmapQuadGO.GetComponent<MeshCollider>());
+            if (heatmapMat != null)
+                heatmapQuadGO.GetComponent<MeshRenderer>().sharedMaterial = heatmapMat;
+            GameObjectUtility.SetStaticEditorFlags(heatmapQuadGO, 0);
+
+            // --- Isosurface Volume ---
+            Material isoMat = null;
+            var isoShader = AssetDatabase.LoadAssetAtPath<Shader>(IsosurfaceShaderPath);
+            if (isoShader != null)
+            {
+                isoMat = new Material(isoShader);
+                isoMat.name = "ToasterIsosurface_Mat";
+            }
+
+            var isoVolumeGO = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            isoVolumeGO.name = "Debug Isosurface";
+            isoVolumeGO.transform.position = new Vector3(0, 0, 16);
+            isoVolumeGO.transform.localScale = new Vector3(12, 8, 12);
+            Object.DestroyImmediate(isoVolumeGO.GetComponent<BoxCollider>());
+            if (isoMat != null)
+                isoVolumeGO.GetComponent<MeshRenderer>().sharedMaterial = isoMat;
+            GameObjectUtility.SetStaticEditorFlags(isoVolumeGO, 0);
+
+            // --- Multi-Slice Volume ---
+            Material multiSliceMat = null;
+            var multiSliceShader = AssetDatabase.LoadAssetAtPath<Shader>(MultiSliceShaderPath);
+            if (multiSliceShader != null)
+            {
+                multiSliceMat = new Material(multiSliceShader);
+                multiSliceMat.name = "ToasterMultiSlice_Mat";
+            }
+
+            var multiSliceGO = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            multiSliceGO.name = "Debug MultiSlice";
+            multiSliceGO.transform.position = new Vector3(0, 0, -16);
+            multiSliceGO.transform.localScale = new Vector3(12, 8, 12);
+            Object.DestroyImmediate(multiSliceGO.GetComponent<BoxCollider>());
+            if (multiSliceMat != null)
+                multiSliceGO.GetComponent<MeshRenderer>().sharedMaterial = multiSliceMat;
+            GameObjectUtility.SetStaticEditorFlags(multiSliceGO, 0);
+
             // --- Bake if requested ---
             if (bakeImmediately)
             {
                 baker.Bake();
 
-                // Wire the baked texture to materials
+                // Wire the baked texture to all visualizer materials
                 if (baker.voxelGrid != null)
                 {
-                    if (volumeMat != null)
-                        volumeMat.SetTexture("_VolumeTex", baker.voxelGrid);
-                    if (debugMat != null)
-                        debugMat.SetTexture("_VolumeTex", baker.voxelGrid);
+                    Material[] vizMats = { volumeMat, debugMat, heatmapMat, isoMat, multiSliceMat };
+                    foreach (var m in vizMats)
+                    {
+                        if (m != null)
+                            m.SetTexture("_VolumeTex", baker.voxelGrid);
+                    }
 
-                    Appliance.Log("Demo scene created and baked!");
+                    Appliance.Log("Demo scene created and baked! Visualizers wired.");
                 }
             }
             else

@@ -15,7 +15,6 @@ namespace Toaster
         public bool drawGizmos = true;
 
         // The Result
-        [HideInInspector]
         public RenderTexture voxelGrid;
 
         // Buffers
@@ -115,9 +114,14 @@ namespace Toaster
                     }
 
                     // --- STEP A: Bake albedo/emission via Meta Pass ---
+                    // Fill with material base color as fallback — Unity primitives lack UV1
+                    // (lightmap UVs) so the Meta pass collapses vertices to (0,0).
+                    // For solid-color materials this gives the exact right result.
+                    Color baseColor = mat.HasColor("_BaseColor") ? mat.GetColor("_BaseColor") : Color.white;
+
                     cmd.Clear();
                     cmd.SetRenderTarget(metaTempRT);
-                    cmd.ClearRenderTarget(true, true, Color.clear);
+                    cmd.ClearRenderTarget(true, true, baseColor);
 
                     // URP Meta Pass CBUFFER setup — required for UV-space rasterization
                     cmd.SetGlobalVector("unity_MetaVertexControl", new Vector4(1, 0, 0, 0));
@@ -149,6 +153,36 @@ namespace Toaster
             cmd.Release();
 
             Appliance.Log($"Bake complete! {objectCount} objects, {triangleCount} triangles.");
+
+            // Diagnostic: readback a slice to verify data was written
+            VerifyGrid(resX, resY);
+        }
+
+        void VerifyGrid(int resX, int resY)
+        {
+            var readbackRT = RenderTexture.GetTemporary(resX, resY, 0, RenderTextureFormat.ARGBHalf);
+            Graphics.Blit(voxelGrid, readbackRT);
+            var prevActive = RenderTexture.active;
+            RenderTexture.active = readbackRT;
+            var tex = new Texture2D(resX, resY, TextureFormat.RGBAHalf, false);
+            tex.ReadPixels(new Rect(0, 0, resX, resY), 0, 0);
+            tex.Apply();
+            RenderTexture.active = prevActive;
+            RenderTexture.ReleaseTemporary(readbackRT);
+
+            int nonZero = 0;
+            var pixels = tex.GetPixels();
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                if (pixels[i].r > 0.001f || pixels[i].g > 0.001f || pixels[i].b > 0.001f || pixels[i].a > 0.001f)
+                    nonZero++;
+            }
+            Object.DestroyImmediate(tex);
+
+            if (nonZero > 0)
+                Appliance.Log($"Diagnostic: {nonZero}/{pixels.Length} non-zero pixels in first slice of voxel grid.");
+            else
+                Appliance.LogWarning("Diagnostic: Voxel grid first slice is EMPTY — bake may have failed.");
         }
 
         void UploadMeshData(Mesh mesh)

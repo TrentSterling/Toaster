@@ -38,7 +38,14 @@ Written as: `LightingGrid[id] = float4(AccumulatedLight.rgb, VoxelDensity);`
 - `Assets/Toaster/Runtime/Shaders/Voxelizer.compute` — HLSL compute shader: `VoxelizeMesh` kernel (triangle-box intersection, barycentric UV interpolation, voxel grid writes) + `ClearGrid` kernel
 - `Assets/Toaster/Runtime/Shaders/ToasterVolume.shader` — URP volumetric fog raymarcher. Ray-box intersection → front-to-back compositing. Blend One OneMinusSrcAlpha, Cull Front, ZWrite Off
 - `Assets/Toaster/Runtime/Shaders/ToasterDebugSlice.shader` — Debug shader: renders a flat 2D Z-slice of the 3D voxel texture on a quad
-- `Assets/Toaster/Editor/ToasterDemoSetup.cs` — Editor menu items: "Toaster > Create Demo Scene" and "Toaster > Create Demo Scene & Bake". Auto-creates camera, lights, test geometry, baker, fog volume, debug slice
+- `Assets/Toaster/Runtime/Shaders/ToasterDebugHeatmap.shader` — False-color heatmap with channel isolation and grid overlay
+- `Assets/Toaster/Runtime/Shaders/ToasterDebugIsosurface.shader` — Raymarched solid surfaces with gradient-estimated normals and lighting
+- `Assets/Toaster/Runtime/Shaders/ToasterDebugMultiSlice.shader` — Hologram-style multi-slice Y-plane visualizer with animation
+- `Assets/Toaster/Runtime/Shaders/ToasterDebugPointCloud.shader` — Billboard per occupied voxel, driven by VoxelPointCloudRenderer.cs
+- `Assets/Toaster/Runtime/VoxelPointCloudRenderer.cs` — Component to configure point cloud shader properties from baker results
+- `Assets/Toaster/Editor/ToasterDemoSetup.cs` — Editor menu items: "Toaster > Create Demo Scene" and "Toaster > Create Demo Scene & Bake". Auto-creates camera, lights, test geometry, baker, all visualizers
+- `Assets/Toaster/TODO.md` — Project roadmap and task tracking
+- `Assets/Toaster/FUTURE.md` — Advanced techniques research (brickmaps, radiance cascades, VXGI, SVO, etc.)
 
 ## Tech Stack
 
