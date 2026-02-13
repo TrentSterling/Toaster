@@ -293,10 +293,14 @@ void IntegrateFroxels(uint3 id : SV_DispatchThreadID)
         // Beer-Lambert extinction for this slice
         float sliceTransmittance = exp(-ext * travelDist);
 
-        // Accumulate in-scattered light weighted by remaining transmittance
-        // Energy-conserving integration: use (1 - sliceT) / extinction as the integral
-        // Simplification: for small extinction, this ≈ travelDist
-        float3 sliceScattering = inScattered * travelDist * transmittance;
+        // Energy-conserving in-scattering integral within the slice:
+        // Exact: integral of S * exp(-sigma*x) dx from 0 to d = S * (1 - exp(-sigma*d)) / sigma
+        // For near-zero extinction, fall back to thin-slab approximation (S * d)
+        float3 sliceScattering;
+        if (ext > 0.00001)
+            sliceScattering = inScattered * ((1.0 - sliceTransmittance) / ext) * transmittance;
+        else
+            sliceScattering = inScattered * travelDist * transmittance;
         accLight += sliceScattering;
 
         transmittance *= sliceTransmittance;

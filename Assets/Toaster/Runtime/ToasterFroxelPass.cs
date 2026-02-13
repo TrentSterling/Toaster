@@ -77,6 +77,7 @@ namespace Toaster
         static readonly int s_LightCount = Shader.PropertyToID("_LightCount");
         static readonly int s_ScatterAnisotropy = Shader.PropertyToID("_ScatterAnisotropy");
         static readonly int s_CameraPos = Shader.PropertyToID("_CameraPos");
+        static readonly int s_CamForward = Shader.PropertyToID("_CamForward");
         static readonly int s_FroxelTex = Shader.PropertyToID("_FroxelTex");
 
         static readonly string[] s_VolumeGridNames = new string[]
@@ -278,7 +279,7 @@ namespace Toaster
         // ============================================================
 
         void DispatchCompute(CommandBuffer cmd, RenderTexture scatteringRT, RenderTexture integratedRT,
-            RenderTexture historyRT, Matrix4x4 invViewProj, Vector3 cameraPos)
+            RenderTexture historyRT, Matrix4x4 invViewProj, Vector3 cameraPos, Vector3 camForward)
         {
             var cs = m_Compute;
             var res = m_Settings.froxelResolution;
@@ -297,6 +298,7 @@ namespace Toaster
             cmd.SetComputeFloatParam(cs, s_FogIntensity, m_Settings.fogIntensity);
             cmd.SetComputeVectorParam(cs, s_AmbientFogColor, m_Settings.ambientColor);
             cmd.SetComputeVectorParam(cs, s_CameraPos, cameraPos);
+            cmd.SetComputeVectorParam(cs, s_CamForward, camForward);
             cmd.SetComputeFloatParam(cs, s_ScatterAnisotropy, m_Settings.scatterAnisotropy);
 
             if (m_BlueNoise != null)
@@ -401,7 +403,7 @@ namespace Toaster
             }
 
             // Dispatch compute
-            DispatchCompute(cmd, scatteringRT, integratedRT, historyRT, invViewProj, cam.transform.position);
+            DispatchCompute(cmd, scatteringRT, integratedRT, historyRT, invViewProj, cam.transform.position, cam.transform.forward);
 
             // Apply fullscreen
             SetApplyMaterialProperties(integratedRT);
@@ -442,6 +444,7 @@ namespace Toaster
             public Matrix4x4 invViewProj;
             public Matrix4x4 prevViewProj;
             public Vector3 cameraPos;
+            public Vector3 camForward;
             public int frameIndex;
             public Texture2D blueNoise;
 
@@ -518,6 +521,7 @@ namespace Toaster
                 passData.invViewProj = invViewProj;
                 passData.prevViewProj = m_PrevViewProj;
                 passData.cameraPos = cameraData.worldSpaceCameraPos;
+                passData.camForward = cameraData.camera.transform.forward;
                 passData.frameIndex = m_FrameIndex;
                 passData.blueNoise = m_BlueNoise;
                 passData.enableTemporal = m_Settings.enableTemporal;
@@ -611,6 +615,7 @@ namespace Toaster
             cmd.SetComputeFloatParam(cs, s_FogIntensity, data.settings.fogIntensity);
             cmd.SetComputeVectorParam(cs, s_AmbientFogColor, data.settings.ambientColor);
             cmd.SetComputeVectorParam(cs, s_CameraPos, data.cameraPos);
+            cmd.SetComputeVectorParam(cs, s_CamForward, data.camForward);
             cmd.SetComputeFloatParam(cs, s_ScatterAnisotropy, data.settings.scatterAnisotropy);
 
             if (data.blueNoise != null)

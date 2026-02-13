@@ -22,6 +22,7 @@ float4x4 _InvViewProj;
 float4x4 _PrevViewProj;
 float4 _ScreenParams_Froxel; // (width, height, 1/width, 1/height)
 float3 _CameraPos;
+float3 _CamForward;
 int _FrameIndex;
 
 // Blue noise
@@ -60,33 +61,30 @@ float3 FroxelToWorld(int3 coord, float jitter)
     // Screen UV from froxel XY
     float2 uv = ((float2)coord.xy + 0.5) / float2(_FroxelResX, _FroxelResY);
 
-    // Depth from slice (with optional jitter along Z)
-    float depth = SliceToDepth((float)coord.z + 0.5 + jitter);
+    // Linear eye depth from slice (with optional jitter along Z)
+    float eyeDepth = SliceToDepth((float)coord.z + 0.5 + jitter);
 
-    // Reconstruct clip space position
     // UV [0,1] → NDC [-1,1], flip Y for DX convention
     float2 ndc = uv * 2.0 - 1.0;
     #if UNITY_UV_STARTS_AT_TOP
     ndc.y = -ndc.y;
     #endif
 
-    // Create clip-space point at the given depth
-    // In Unity reversed-Z: near=1, far=0
-    // We want a point at 'depth' linear eye distance
-    // Use a far-plane point and scale by depth
-    float4 clipFar = float4(ndc.x, ndc.y, 0.0, 1.0); // reversed-Z: far = 0
+    // Unproject far-plane point to world space (reversed-Z: far = 0)
+    float4 clipFar = float4(ndc.x, ndc.y, 0.0, 1.0);
     float4 worldFar = mul(_InvViewProj, clipFar);
     worldFar.xyz /= worldFar.w;
 
-    float4 clipNear = float4(ndc.x, ndc.y, 1.0, 1.0); // reversed-Z: near = 1
-    float4 worldNear = mul(_InvViewProj, clipNear);
-    worldNear.xyz /= worldNear.w;
+    // Ray from camera to this pixel's far-plane point (NOT normalized!)
+    // The length encodes the perspective correction for this pixel.
+    float3 ray = worldFar.xyz - _CameraPos;
 
-    // Ray from camera through this pixel
-    float3 camPos = worldNear.xyz; // at near plane ≈ camera
-    float3 rayDir = normalize(worldFar.xyz - worldNear.xyz);
+    // Project ray onto camera forward to get the eye-depth at the far plane
+    // Then scale ray so that the eye-depth component equals our desired depth
+    float viewDepthAtFar = dot(ray, _CamForward);
+    float t = eyeDepth / viewDepthAtFar;
 
-    return camPos + rayDir * depth;
+    return _CameraPos + ray * t;
 }
 
 // ============================================================
