@@ -153,6 +153,15 @@
         "com.unity.searcher": "4.9.3"
       }
     },
+    "com.unity.sponza-urp": {
+      "version": "https://github.com/alexmalyutindev/sponza-unity-urp.git",
+      "depth": 0,
+      "source": "git",
+      "dependencies": {
+        "com.unity.render-pipelines.universal": "14.0.10"
+      },
+      "hash": "5665fb87d07b2943424eab5827f76d74f314de9d"
+    },
     "com.unity.sysroot": {
       "version": "2.0.10",
       "depth": 1,

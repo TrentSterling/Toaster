@@ -35,6 +35,12 @@ namespace Toaster
             SetupScene2();
         }
 
+        [MenuItem("Toaster/Create Demo Scene 3 — Sponza && Bake")]
+        public static void CreateDemoScene3AndBake()
+        {
+            SetupScene3();
+        }
+
         private static void SetupScene(bool bakeImmediately)
         {
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
@@ -641,6 +647,211 @@ namespace Toaster
             {
                 SceneView.lastActiveSceneView.LookAt(new Vector3(0, 3, 0), Quaternion.Euler(25, -20, 0), 18f);
             }
+        }
+
+        // ============================================================
+        // Demo Scene 3 — Sponza courtyard with Toaster pipeline
+        // Real PBR materials, dramatic lighting, full voxelization test
+        // ============================================================
+
+        private static void SetupScene3()
+        {
+            const string SponzaFBXPath = "Packages/com.unity.sponza-urp/Meshes/Sponza_Modular.FBX";
+
+            var sponzaPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(SponzaFBXPath);
+            if (sponzaPrefab == null)
+            {
+                Appliance.LogWarning("Could not find Sponza FBX at: " + SponzaFBXPath +
+                    "\nInstall the package: Window > Package Manager > + > Add from git URL > " +
+                    "https://github.com/alexmalyutindev/sponza-unity-urp.git");
+                return;
+            }
+
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+
+            // ============================================================
+            // Instantiate Sponza
+            // ============================================================
+            var sponza = (GameObject)PrefabUtility.InstantiatePrefab(sponzaPrefab);
+            sponza.name = "Sponza";
+            sponza.transform.position = Vector3.zero;
+            sponza.transform.rotation = Quaternion.identity;
+
+            // Mark all meshes as Contribute GI (needed for Meta Pass)
+            foreach (var renderer in sponza.GetComponentsInChildren<MeshRenderer>())
+            {
+                GameObjectUtility.SetStaticEditorFlags(renderer.gameObject, StaticEditorFlags.ContributeGI);
+            }
+
+            // Figure out Sponza bounds from all renderers
+            Bounds sponzaBounds = new Bounds(Vector3.zero, Vector3.zero);
+            bool first = true;
+            foreach (var renderer in sponza.GetComponentsInChildren<Renderer>())
+            {
+                if (first) { sponzaBounds = renderer.bounds; first = false; }
+                else sponzaBounds.Encapsulate(renderer.bounds);
+            }
+            Appliance.Log($"Sponza bounds: center={sponzaBounds.center}, size={sponzaBounds.size}");
+
+            // ============================================================
+            // Camera — inside the lower corridor, looking down the length
+            // ============================================================
+            var cameraGO = new GameObject("Main Camera");
+            cameraGO.tag = "MainCamera";
+            var cam = cameraGO.AddComponent<Camera>();
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = new Color(0.01f, 0.01f, 0.02f, 1f);
+            cam.nearClipPlane = 0.3f;
+            cam.farClipPlane = 200f;
+            // Position in lower corridor, looking along the long axis
+            Vector3 camPos = sponzaBounds.center + new Vector3(-sponzaBounds.extents.x * 0.7f, -sponzaBounds.extents.y * 0.3f, 0);
+            cameraGO.transform.position = camPos;
+            cameraGO.transform.rotation = Quaternion.Euler(5, 90, 0); // look along +X
+            cameraGO.AddComponent<UniversalAdditionalCameraData>();
+
+            // ============================================================
+            // Lighting — dramatic sunlight + colored accents
+            // ============================================================
+            // Warm directional (sunlight streaming through open courtyard top)
+            var sunGO = new GameObject("Sun");
+            var sunLight = sunGO.AddComponent<Light>();
+            sunLight.type = LightType.Directional;
+            sunLight.color = new Color(1f, 0.9f, 0.7f);
+            sunLight.intensity = 1.5f;
+            sunGO.transform.rotation = Quaternion.Euler(55, 30, 0);
+
+            // Warm fill bouncing from stone
+            CreatePointLight("Warm Fill 1",
+                sponzaBounds.center + new Vector3(-5, 1, 0), new Color(1f, 0.8f, 0.5f), 20f, 4f);
+            CreatePointLight("Warm Fill 2",
+                sponzaBounds.center + new Vector3(5, 1, 0), new Color(1f, 0.85f, 0.6f), 20f, 3f);
+
+            // Cool accent lights in the upper corridor
+            CreatePointLight("Cool Upper 1",
+                sponzaBounds.center + new Vector3(-3, sponzaBounds.extents.y * 0.5f, 2), new Color(0.4f, 0.6f, 1f), 15f, 5f);
+            CreatePointLight("Cool Upper 2",
+                sponzaBounds.center + new Vector3(3, sponzaBounds.extents.y * 0.5f, -2), new Color(0.3f, 0.5f, 0.9f), 15f, 5f);
+
+            // Colored accent near curtains
+            CreatePointLight("Red Accent",
+                sponzaBounds.center + new Vector3(0, 1, sponzaBounds.extents.z * 0.6f), new Color(1f, 0.2f, 0.1f), 12f, 6f);
+            CreatePointLight("Green Accent",
+                sponzaBounds.center + new Vector3(0, 1, -sponzaBounds.extents.z * 0.6f), new Color(0.2f, 1f, 0.3f), 12f, 6f);
+
+            // Spot light — dramatic shaft from above
+            var spotGO = new GameObject("Spot Shaft");
+            var spotLight = spotGO.AddComponent<Light>();
+            spotLight.type = LightType.Spot;
+            spotLight.color = new Color(1f, 0.95f, 0.8f);
+            spotLight.intensity = 15f;
+            spotLight.range = 30f;
+            spotLight.spotAngle = 45f;
+            spotGO.transform.position = sponzaBounds.center + new Vector3(0, sponzaBounds.extents.y + 2, 0);
+            spotGO.transform.rotation = Quaternion.Euler(90, 0, 0); // point straight down
+
+            // ============================================================
+            // Toaster Baker — covers the whole Sponza
+            // ============================================================
+            var computeShader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            var tracerCompute = AssetDatabase.LoadAssetAtPath<ComputeShader>(TracerComputePath);
+
+            var bakerGO = new GameObject("Toaster Baker");
+            var baker = bakerGO.AddComponent<VoxelBaker>();
+            // Use Sponza bounds with a little padding
+            baker.boundsSize = sponzaBounds.size + Vector3.one * 2f;
+            baker.voxelSize = 0.5f; // 0.5m voxels — Sponza is big
+            bakerGO.transform.position = sponzaBounds.center;
+            if (computeShader != null)
+                baker.voxelizerCompute = computeShader;
+
+            var tracer = bakerGO.AddComponent<ToasterTracer>();
+            tracer.baker = baker;
+            tracer.raysPerVoxel = 64;
+            tracer.maxBounces = 3;
+            if (tracerCompute != null)
+                tracer.tracerCompute = tracerCompute;
+
+            // ============================================================
+            // Fog Volume — covers entire Sponza, froxel-only
+            // ============================================================
+            var fogVolumeGO = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            fogVolumeGO.name = "Fog Volume (Sponza)";
+            fogVolumeGO.transform.position = sponzaBounds.center;
+            fogVolumeGO.transform.localScale = baker.boundsSize;
+            Object.DestroyImmediate(fogVolumeGO.GetComponent<BoxCollider>());
+            fogVolumeGO.GetComponent<MeshRenderer>().enabled = false;
+            var toasterVol = fogVolumeGO.AddComponent<ToasterVolume>();
+            toasterVol.baker = baker;
+            toasterVol.densityMultiplier = 3f;
+            toasterVol.intensityMultiplier = 2f;
+            toasterVol.edgeFalloff = 0.1f;
+            toasterVol.autoMatchBounds = true;
+            GameObjectUtility.SetStaticEditorFlags(fogVolumeGO, 0);
+
+            // ============================================================
+            // Bake + Trace
+            // ============================================================
+            Appliance.Log("Baking Sponza... this may take a moment with real geometry.");
+            baker.Bake();
+            if (baker.voxelGrid != null && tracer.tracerCompute != null)
+            {
+                tracer.Trace();
+            }
+
+            // Configure froxel for Sponza — larger space needs more distance
+            ConfigureFroxelForScene3(sponzaBounds);
+
+            Appliance.Log($"Demo Scene 3 (Sponza) created. {sponzaBounds.size} bounds, voxelSize=0.5. Baked + traced.");
+
+            if (SceneView.lastActiveSceneView != null)
+            {
+                SceneView.lastActiveSceneView.LookAt(sponzaBounds.center, Quaternion.Euler(30, 45, 0), sponzaBounds.size.magnitude * 0.5f);
+            }
+        }
+
+        private static void ConfigureFroxelForScene3(Bounds sponzaBounds)
+        {
+            var pipeline = GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset;
+            if (pipeline == null) return;
+
+            var pipeType = pipeline.GetType();
+            var rendererListField = pipeType.GetField("m_RendererDataList",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (rendererListField == null) return;
+
+            var rendererList = rendererListField.GetValue(pipeline) as ScriptableRendererData[];
+            if (rendererList == null || rendererList.Length == 0) return;
+
+            var rendererData = rendererList[0];
+            ToasterFroxelFeature froxelFeature = null;
+            foreach (var feature in rendererData.rendererFeatures)
+            {
+                if (feature is ToasterFroxelFeature f) { froxelFeature = f; break; }
+            }
+
+            if (froxelFeature == null)
+            {
+                Appliance.Log("No ToasterFroxelFeature on renderer — add via Toaster > Baker Window.");
+                return;
+            }
+
+            // Sponza is ~25m long — maxDistance should cover the full courtyard
+            float maxDist = Mathf.Max(sponzaBounds.size.x, sponzaBounds.size.z) * 3f;
+            froxelFeature.settings.fogDensity = 0.008f;
+            froxelFeature.settings.fogIntensity = 0.5f;
+            froxelFeature.settings.scatteringAlbedo = 5f;
+            froxelFeature.settings.ambientColor = new Color(0.06f, 0.05f, 0.08f, 1f);
+            froxelFeature.settings.lightDensityBoost = 2f;
+            froxelFeature.settings.maxDistance = maxDist;
+            froxelFeature.settings.scatterAnisotropy = 0.4f;
+            froxelFeature.settings.enableTemporal = true;
+            froxelFeature.settings.temporalBlendAlpha = 0.2f;
+            froxelFeature.settings.debugMode = ToasterFroxelFeature.DebugMode.Off;
+
+            EditorUtility.SetDirty(froxelFeature);
+            EditorUtility.SetDirty(rendererData);
+            AssetDatabase.SaveAssets();
+            Appliance.Log($"Froxel configured for Sponza: density=0.008, albedo=5, lightBoost=2, maxDist={maxDist:F0}");
         }
 
         private static void ConfigureFroxelForScene2()

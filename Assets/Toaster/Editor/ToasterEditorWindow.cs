@@ -83,6 +83,9 @@ namespace Toaster
                 if (GUILayout.Button("Create Demo Scene 2 && Bake (Froxel Test)", GUILayout.Height(30)))
                     ToasterDemoSetup.CreateDemoScene2AndBake();
 
+                if (GUILayout.Button("Create Demo Scene 3 — Sponza && Bake", GUILayout.Height(30)))
+                    ToasterDemoSetup.CreateDemoScene3AndBake();
+
                 EditorGUILayout.Space(8);
                 DrawFroxelSetup();
 
