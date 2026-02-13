@@ -197,19 +197,22 @@ void InjectMedia(uint3 id : SV_DispatchThreadID)
             baseDensity *= 1.0 - sqrt(t); // sqrt falloff — denser at bottom
         }
 
-        // Sample baked lighting for the in-scattered light color
+        // Sample baked lighting grid — rgb = traced light, a = voxel occupancy
         int gridIdx = (int)vol.settings.z;
         float4 voxelData = SampleVolumeGrid(gridIdx, uvw);
+        float occupancy = voxelData.a; // 1.0 = solid wall, 0.0 = empty air
 
         // Fog color = (baked light + ambient) scaled by intensity
         float3 bakedColor = (voxelData.rgb + _AmbientFogColor.rgb)
                           * vol.settings.y * _FogIntensity;
 
-        // In-scattering = baked light color * density * albedo
-        // The baked lighting grid already has properly traced/shadowed light —
-        // no need for real-time light evaluation (which can't match offline trace quality)
-        scattering += bakedColor * baseDensity * _ScatteringAlbedo;
-        extinction += baseDensity;
+        // Solid voxels: high extinction (opaque barrier) but no scattering (walls aren't fog)
+        // Empty voxels: normal fog density with baked light color
+        // This makes Beer-Lambert integration treat walls as opaque blockers —
+        // fog behind walls is properly occluded during front-to-back integration.
+        float wallExtinction = occupancy * 50.0; // exp(-50 * sliceDepth) ≈ 0 transmittance
+        scattering += bakedColor * baseDensity * (1.0 - occupancy) * _ScatteringAlbedo;
+        extinction += baseDensity + wallExtinction;
     }
 
     // Light-localized density boost: makes fog denser near lights (halo effect)
