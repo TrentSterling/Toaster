@@ -194,11 +194,15 @@ namespace Toaster
                 }
 
                 Mesh mesh = mf.sharedMesh;
+#if !UNITY_EDITOR
+                // In builds, mesh data is only accessible if Read/Write is enabled.
+                // In the Editor, Unity always allows mesh data access regardless of this flag.
                 if (!mesh.isReadable)
                 {
                     Appliance.LogWarning($"Mesh '{mesh.name}' on '{rend.name}' is not readable (enable Read/Write in import settings). Skipping.");
                     continue;
                 }
+#endif
                 if (rend.sharedMaterials.Length == 0)
                 {
                     Appliance.LogWarning($"Renderer '{rend.name}' has no materials. Skipping.");
