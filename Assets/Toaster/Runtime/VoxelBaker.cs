@@ -195,7 +195,7 @@ namespace Toaster
                 Mesh mesh = mf.sharedMesh;
                 if (!mesh.isReadable)
                 {
-                    Appliance.LogWarning($"Mesh '{mesh.name}' is not readable (enable Read/Write in import settings). Skipping.");
+                    Appliance.LogWarning($"Mesh '{mesh.name}' on '{rend.name}' is not readable (enable Read/Write in import settings). Skipping.");
                     continue;
                 }
                 if (rend.sharedMaterials.Length == 0)
@@ -205,7 +205,10 @@ namespace Toaster
                 }
 
                 eligible.Add((rend, mesh));
+                Appliance.Log($"  Eligible: '{rend.name}' mesh='{mesh.name}' verts={mesh.vertexCount} tris={mesh.triangles.Length / 3} submeshes={mesh.subMeshCount} readable={mesh.isReadable}");
             }
+
+            Appliance.Log($"Filter complete: {eligible.Count} eligible objects out of {renderers.Length} total renderers.");
 
             // --- Phase 2: Merge all geometry into mega-buffers (world-space) ---
             // One upload, one bind — eliminates per-object GPU buffer churn.
@@ -431,10 +434,16 @@ namespace Toaster
             }
             Object.DestroyImmediate(tex);
 
+            int nonZeroAlpha = 0;
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                if (pixels[i].a > 0.5f) nonZeroAlpha++;
+            }
+
             if (nonZero > 0)
-                Appliance.Log($"Diagnostic: {nonZero}/{pixels.Length} non-zero pixels in first slice of voxel grid.");
+                Appliance.Log($"Diagnostic: {nonZero}/{pixels.Length} non-zero color, {nonZeroAlpha}/{pixels.Length} solid voxels (alpha>0.5) in first slice.");
             else
-                Appliance.LogWarning("Diagnostic: Voxel grid first slice is EMPTY — bake may have failed.");
+                Appliance.LogWarning("Diagnostic: Voxel grid first slice is EMPTY — bake may have failed. Check if meshes are readable and have Meta Pass.");
         }
 
         /// <summary>
