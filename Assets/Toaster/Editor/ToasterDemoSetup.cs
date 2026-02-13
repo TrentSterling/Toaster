@@ -14,6 +14,7 @@ namespace Toaster
         private const string IsosurfaceShaderPath = "Assets/Toaster/Runtime/Shaders/ToasterDebugIsosurface.shader";
         private const string MultiSliceShaderPath = "Assets/Toaster/Runtime/Shaders/ToasterDebugMultiSlice.shader";
         private const string PointCloudShaderPath = "Assets/Toaster/Runtime/Shaders/ToasterDebugPointCloud.shader";
+        private const string TracerComputePath = "Assets/Toaster/Runtime/Shaders/ToasterTracer.compute";
 
         [MenuItem("Toaster/Create Demo Scene")]
         public static void CreateDemoScene()
@@ -103,6 +104,16 @@ namespace Toaster
             {
                 Appliance.LogWarning($"Could not find compute shader at {ComputeShaderPath}. Assign manually.");
             }
+
+            // --- Toaster Tracer ---
+            var tracerGO = new GameObject("Toaster Tracer");
+            var tracer = tracerGO.AddComponent<ToasterTracer>();
+            tracer.baker = baker;
+            var tracerCompute = AssetDatabase.LoadAssetAtPath<ComputeShader>(TracerComputePath);
+            if (tracerCompute != null)
+                tracer.tracerCompute = tracerCompute;
+            else
+                Appliance.LogWarning($"Could not find tracer compute at {TracerComputePath}. Assign manually.");
 
             // --- Fog Volume ---
             Material volumeMat = null;
@@ -228,7 +239,16 @@ namespace Toaster
                     // Wire point cloud renderer
                     pcRenderer.ConfigureFromBaker(baker);
 
-                    Appliance.Log("Demo scene created and baked! Visualizers wired.");
+                    // Trace lighting
+                    if (tracer.tracerCompute != null)
+                    {
+                        tracer.Trace();
+                        // Wire lighting grid to fog volume (overrides albedo with lit result)
+                        if (tracer.lightingGrid != null && volumeMat != null)
+                            volumeMat.SetTexture("_VolumeTex", tracer.lightingGrid);
+                    }
+
+                    Appliance.Log("Demo scene created, baked, and traced! Visualizers wired.");
                 }
             }
             else

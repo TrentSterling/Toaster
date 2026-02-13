@@ -2,10 +2,13 @@ Shader "Toaster/Volume"
 {
     Properties
     {
-        _VolumeTex ("Volume Texture", 3D) = "" {}
+        _VolumeTex ("Volume Texture (Albedo)", 3D) = "" {}
+        [Toggle(_USE_LIGHTING)] _UseLighting ("Use Lighting Grid", Float) = 0
+        _LightingTex ("Lighting Grid", 3D) = "" {}
         _Intensity ("Intensity", Range(0, 10)) = 1.0
         _StepCount ("Step Count", Range(8, 256)) = 64
         _Density ("Density Multiplier", Range(0, 5)) = 1.0
+        [Toggle(_ADDITIVE_MODE)] _AdditiveMode ("Additive Blend (Emissive Glow)", Float) = 0
     }
 
     SubShader
@@ -23,11 +26,15 @@ Shader "Toaster/Volume"
             HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            #pragma shader_feature_local _USE_LIGHTING
+            #pragma shader_feature_local _ADDITIVE_MODE
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
             TEXTURE3D(_VolumeTex);
             SAMPLER(sampler_VolumeTex);
+            TEXTURE3D(_LightingTex);
+            SAMPLER(sampler_LightingTex);
 
             CBUFFER_START(UnityPerMaterial)
                 float _Intensity;
@@ -111,7 +118,14 @@ Shader "Toaster/Volume"
 
                     float4 voxelData = SAMPLE_TEXTURE3D_LOD(_VolumeTex, sampler_VolumeTex, uvw, 0);
 
+                    #ifdef _USE_LIGHTING
+                    // Blend albedo with traced lighting
+                    float4 lightData = SAMPLE_TEXTURE3D_LOD(_LightingTex, sampler_LightingTex, uvw, 0);
+                    float3 color = lightData.rgb * _Intensity;
+                    #else
                     float3 color = voxelData.rgb * _Intensity;
+                    #endif
+
                     float density = voxelData.a * _Density * stepSize;
 
                     // Front-to-back blending

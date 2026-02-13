@@ -4,7 +4,7 @@ namespace Toaster
 {
     public static class Appliance
     {
-        public const string Version = "0.4 (Crumb)";
+        public const string Version = "0.5 (Crumb)";
 
         public enum BrowningLevel
         {

@@ -89,16 +89,27 @@ namespace Toaster
             // Bake buttons
             EditorGUILayout.LabelField("Actions", EditorStyles.boldLabel);
 
+            EditorGUILayout.BeginHorizontal();
             GUI.backgroundColor = new Color(0.3f, 0.8f, 0.3f);
             if (GUILayout.Button("Bake Voxels", GUILayout.Height(36)))
-            {
                 selectedBaker.Bake();
+            GUI.backgroundColor = new Color(0.8f, 0.5f, 0.2f);
+            if (GUILayout.Button("Trace Lighting", GUILayout.Height(36)))
+            {
+                var tracer = FindFirstObjectByType<ToasterTracer>();
+                if (tracer != null)
+                    tracer.Trace();
+                else
+                    Appliance.LogWarning("No ToasterTracer found in scene.");
             }
+            EditorGUILayout.EndHorizontal();
             GUI.backgroundColor = Color.white;
 
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("Wire Visualizers"))
                 selectedBaker.WireVisualizers();
+            if (GUILayout.Button("Auto-Fit Bounds"))
+                selectedBaker.AutoFitBounds();
             if (GUILayout.Button("Select Baker"))
                 Selection.activeGameObject = selectedBaker.gameObject;
             EditorGUILayout.EndHorizontal();

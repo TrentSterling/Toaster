@@ -226,9 +226,11 @@ namespace Toaster
                     triangleCount += subMeshTriCount;
                 }
 
-                ReleaseBuffers();
                 objectCount++;
             }
+
+            // Release pooled mesh buffers after all objects are processed
+            ReleaseBuffers();
 
             RenderTexture.ReleaseTemporary(metaTempRT);
             cmd.Release();
@@ -291,26 +293,36 @@ namespace Toaster
 
         void UploadMeshData(Mesh mesh)
         {
-            ReleaseBuffers();
-
             var verts = mesh.vertices;
-            vertBuffer = new ComputeBuffer(verts.Length, 12);
+            EnsureBuffer(ref vertBuffer, verts.Length, 12);
             vertBuffer.SetData(verts);
 
             var normals = mesh.normals;
             if (normals.Length == 0) normals = new Vector3[verts.Length];
-            normalBuffer = new ComputeBuffer(normals.Length, 12);
+            EnsureBuffer(ref normalBuffer, normals.Length, 12);
             normalBuffer.SetData(normals);
 
             // Use UV2 (lightmap) if available, else UV0
             var uvs = mesh.uv2.Length > 0 ? mesh.uv2 : mesh.uv;
             if (uvs.Length == 0) uvs = new Vector2[verts.Length];
-            uvBuffer = new ComputeBuffer(uvs.Length, 8);
+            EnsureBuffer(ref uvBuffer, uvs.Length, 8);
             uvBuffer.SetData(uvs);
 
             var indices = mesh.triangles;
-            indexBuffer = new ComputeBuffer(indices.Length, 4);
+            EnsureBuffer(ref indexBuffer, indices.Length, 4);
             indexBuffer.SetData(indices);
+        }
+
+        /// <summary>
+        /// Reuse existing buffer if large enough, otherwise release and create a new one.
+        /// Reduces GC pressure and GPU allocation churn during multi-object bakes.
+        /// </summary>
+        static void EnsureBuffer(ref ComputeBuffer buffer, int count, int stride)
+        {
+            if (buffer != null && buffer.count >= count && buffer.stride == stride)
+                return; // Reuse — existing buffer is large enough
+            if (buffer != null) buffer.Release();
+            buffer = new ComputeBuffer(count, stride);
         }
 
         void ReleaseBuffers()
@@ -402,9 +414,56 @@ namespace Toaster
         }
 
         /// <summary>
-        /// Finds all Toaster visualizer materials and point cloud renderers in the scene
-        /// and wires them to this baker's voxel grid.
+        /// Computes the scene AABB from all eligible renderers and sets boundsSize + position.
         /// </summary>
+        [ContextMenu("Auto-Fit Bounds")]
+        public void AutoFitBounds()
+        {
+            var renderers = FindObjectsByType<MeshRenderer>(FindObjectsSortMode.None);
+            Bounds combined = new Bounds();
+            bool first = true;
+
+            foreach (var rend in renderers)
+            {
+                if (skipToasterShaders && rend.sharedMaterial != null &&
+                    rend.sharedMaterial.shader != null &&
+                    rend.sharedMaterial.shader.name.StartsWith("Toaster/"))
+                    continue;
+
+#if UNITY_EDITOR
+                if (requireContributeGI)
+                {
+                    var flags = GameObjectUtility.GetStaticEditorFlags(rend.gameObject);
+                    if ((flags & StaticEditorFlags.ContributeGI) == 0)
+                        continue;
+                }
+#endif
+
+                if (first)
+                {
+                    combined = rend.bounds;
+                    first = false;
+                }
+                else
+                {
+                    combined.Encapsulate(rend.bounds);
+                }
+            }
+
+            if (first)
+            {
+                Appliance.LogWarning("No eligible renderers found for auto-bounds.");
+                return;
+            }
+
+            // Add padding (one voxel on each side)
+            float pad = voxelSize * 2f;
+            transform.position = combined.center;
+            boundsSize = combined.size + Vector3.one * pad;
+
+            Appliance.Log($"Auto-fit bounds: center={combined.center}, size={boundsSize}");
+        }
+
         /// <summary>
         /// Returns the best available texture: runtime RT if it exists, otherwise serialized Texture3D.
         /// </summary>

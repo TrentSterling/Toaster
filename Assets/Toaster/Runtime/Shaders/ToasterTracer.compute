@@ -1,0 +1,288 @@
+#pragma kernel TraceLight
+#pragma kernel ClearLighting
+
+// --- Textures ---
+Texture3D<float4> AlbedoGrid;       // Baked voxel colors (from VoxelBaker)
+RWTexture3D<float4> LightingGrid;   // Output: accumulated light per voxel
+SamplerState samplerAlbedoGrid;
+
+// --- Grid setup ---
+int3 GridResolution;
+float3 WorldBoundsMin;
+float3 WorldBoundsMax;
+float VoxelSize;
+
+// --- Tracing params ---
+int RaysPerVoxel;       // e.g. 64
+int MaxBounces;         // e.g. 3
+float LightFalloff;     // Inverse square attenuation multiplier
+
+// --- Lights (point lights) ---
+// Packed as: xyz = position, w = range
+// Color packed separately
+int LightCount;
+StructuredBuffer<float4> LightPositions;  // xyz = pos, w = range
+StructuredBuffer<float4> LightColors;     // xyz = color, w = intensity
+
+// --- Noise ---
+uint FrameSeed;  // Seed for temporal variation
+
+// ============================================================
+// Low-discrepancy sampling — Halton sequence
+// ============================================================
+
+float HaltonSequence(uint index, uint base_val)
+{
+    float result = 0.0;
+    float f = 1.0 / (float) base_val;
+    uint i = index;
+    while (i > 0)
+    {
+        result += f * (float)(i % base_val);
+        i = i / base_val;
+        f = f / (float) base_val;
+    }
+    return result;
+}
+
+// Hash function for per-voxel seed variation
+uint WangHash(uint seed)
+{
+    seed = (seed ^ 61) ^ (seed >> 16);
+    seed *= 9;
+    seed = seed ^ (seed >> 4);
+    seed *= 0x27d4eb2d;
+    seed = seed ^ (seed >> 15);
+    return seed;
+}
+
+// Uniform sphere sampling from two uniform random values
+float3 SampleSphere(float u1, float u2)
+{
+    float z = 1.0 - 2.0 * u1;
+    float r = sqrt(max(0.0, 1.0 - z * z));
+    float phi = 6.28318530718 * u2;
+    return float3(r * cos(phi), r * sin(phi), z);
+}
+
+// Cosine-weighted hemisphere sampling (for diffuse bounces)
+float3 SampleHemisphere(float u1, float u2, float3 normal)
+{
+    float3 dir = SampleSphere(u1, u2);
+    // Flip to hemisphere aligned with normal
+    return dir * sign(dot(dir, normal));
+}
+
+// ============================================================
+// Voxel grid DDA ray marching
+// ============================================================
+
+struct VoxelHit
+{
+    bool hit;
+    int3 voxelCoord;
+    float4 albedo;
+    float distance;
+};
+
+// World position to grid coordinate
+int3 WorldToGrid(float3 worldPos)
+{
+    return (int3)((worldPos - WorldBoundsMin) / VoxelSize);
+}
+
+bool InGrid(int3 coord)
+{
+    return all(coord >= 0) && all(coord < GridResolution);
+}
+
+// DDA ray march through voxel grid
+VoxelHit MarchRay(float3 origin, float3 direction, float maxDist)
+{
+    VoxelHit result;
+    result.hit = false;
+    result.voxelCoord = int3(0, 0, 0);
+    result.albedo = float4(0, 0, 0, 0);
+    result.distance = maxDist;
+
+    // Convert to grid space
+    float3 gridOrigin = (origin - WorldBoundsMin) / VoxelSize;
+    float3 gridDir = direction; // Direction stays the same, step size changes
+
+    int3 pos = (int3)floor(gridOrigin);
+    int3 step = int3(
+        direction.x >= 0 ? 1 : -1,
+        direction.y >= 0 ? 1 : -1,
+        direction.z >= 0 ? 1 : -1
+    );
+
+    // Distance to next voxel boundary per axis
+    float3 tMax;
+    float3 tDelta;
+
+    float3 invDir = 1.0 / (abs(direction) + 1e-8);
+
+    tDelta = invDir * VoxelSize;
+
+    tMax.x = ((direction.x >= 0 ? (pos.x + 1) : pos.x) * VoxelSize + WorldBoundsMin.x - origin.x) * (direction.x >= 0 ? 1 : -1) * invDir.x;
+    tMax.y = ((direction.y >= 0 ? (pos.y + 1) : pos.y) * VoxelSize + WorldBoundsMin.y - origin.y) * (direction.y >= 0 ? 1 : -1) * invDir.y;
+    tMax.z = ((direction.z >= 0 ? (pos.z + 1) : pos.z) * VoxelSize + WorldBoundsMin.z - origin.z) * (direction.z >= 0 ? 1 : -1) * invDir.z;
+
+    float t = 0;
+    int maxSteps = GridResolution.x + GridResolution.y + GridResolution.z;
+
+    // Skip the starting voxel
+    for (int i = 0; i < maxSteps && t < maxDist; i++)
+    {
+        // Step to next voxel
+        if (tMax.x < tMax.y)
+        {
+            if (tMax.x < tMax.z) { pos.x += step.x; t = tMax.x; tMax.x += tDelta.x; }
+            else                 { pos.z += step.z; t = tMax.z; tMax.z += tDelta.z; }
+        }
+        else
+        {
+            if (tMax.y < tMax.z) { pos.y += step.y; t = tMax.y; tMax.y += tDelta.y; }
+            else                 { pos.z += step.z; t = tMax.z; tMax.z += tDelta.z; }
+        }
+
+        if (!InGrid(pos))
+            break;
+
+        float4 voxel = AlbedoGrid[pos];
+        if (voxel.a > 0.01) // Occupied voxel
+        {
+            result.hit = true;
+            result.voxelCoord = pos;
+            result.albedo = voxel;
+            result.distance = t;
+            return result;
+        }
+    }
+
+    return result;
+}
+
+// ============================================================
+// Light sampling
+// ============================================================
+
+float3 SampleDirectLight(float3 worldPos)
+{
+    float3 totalLight = float3(0, 0, 0);
+
+    for (int i = 0; i < LightCount; i++)
+    {
+        float3 lightPos = LightPositions[i].xyz;
+        float lightRange = LightPositions[i].w;
+        float3 lightColor = LightColors[i].xyz;
+        float lightIntensity = LightColors[i].w;
+
+        float3 toLight = lightPos - worldPos;
+        float dist = length(toLight);
+
+        if (dist > lightRange)
+            continue;
+
+        float3 dir = toLight / dist;
+
+        // Shadow ray — check for occluding voxels between point and light
+        VoxelHit shadow = MarchRay(worldPos + dir * VoxelSize, dir, dist);
+        if (shadow.hit && shadow.distance < dist)
+            continue; // In shadow
+
+        // Inverse square falloff with range attenuation
+        float attenuation = 1.0 / (1.0 + LightFalloff * dist * dist);
+        float rangeAtten = saturate(1.0 - (dist / lightRange));
+        rangeAtten *= rangeAtten; // Smooth falloff at range boundary
+
+        totalLight += lightColor * lightIntensity * attenuation * rangeAtten;
+    }
+
+    return totalLight;
+}
+
+// ============================================================
+// Main trace kernel
+// ============================================================
+
+[numthreads(4, 4, 4)]
+void TraceLight(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= (uint3) GridResolution))
+        return;
+
+    float4 albedo = AlbedoGrid[id];
+    if (albedo.a < 0.01)
+        return; // Empty voxel — skip
+
+    float3 worldPos = WorldBoundsMin + ((float3)id + 0.5) * VoxelSize;
+
+    // Unique seed per voxel + frame for temporal variation
+    uint voxelIndex = id.x + id.y * GridResolution.x + id.z * GridResolution.x * GridResolution.y;
+    uint seed = WangHash(voxelIndex + FrameSeed * 73856093);
+
+    float3 accumulatedLight = float3(0, 0, 0);
+
+    for (int ray = 0; ray < RaysPerVoxel; ray++)
+    {
+        // Halton sequence for well-distributed ray directions
+        uint sampleIndex = seed + ray;
+        float u1 = HaltonSequence(sampleIndex, 2);
+        float u2 = HaltonSequence(sampleIndex, 3);
+
+        float3 rayDir = SampleSphere(u1, u2);
+        float3 throughput = float3(1, 1, 1);
+        float3 rayLight = float3(0, 0, 0);
+        float3 currentPos = worldPos;
+
+        // Direct lighting at this voxel
+        rayLight += SampleDirectLight(currentPos) * albedo.rgb;
+
+        // Bounce tracing
+        for (int bounce = 0; bounce < MaxBounces; bounce++)
+        {
+            VoxelHit bounceHit = MarchRay(currentPos + rayDir * VoxelSize, rayDir,
+                length(WorldBoundsMax - WorldBoundsMin));
+
+            if (!bounceHit.hit)
+                break;
+
+            // Attenuate by the hit voxel's albedo (color bleeding)
+            throughput *= bounceHit.albedo.rgb;
+
+            // Move to the hit position
+            currentPos = WorldBoundsMin + ((float3)bounceHit.voxelCoord + 0.5) * VoxelSize;
+
+            // Sample direct light at the bounce position
+            float3 bounceDirect = SampleDirectLight(currentPos);
+            rayLight += bounceDirect * throughput;
+
+            // Russian roulette for early termination
+            float maxComponent = max(throughput.r, max(throughput.g, throughput.b));
+            if (maxComponent < 0.01)
+                break;
+
+            // New random direction for next bounce
+            sampleIndex = WangHash(sampleIndex + bounce);
+            u1 = HaltonSequence(sampleIndex, 2);
+            u2 = HaltonSequence(sampleIndex, 3);
+            rayDir = SampleSphere(u1, u2);
+        }
+
+        accumulatedLight += rayLight;
+    }
+
+    // Average over all rays
+    accumulatedLight /= (float) RaysPerVoxel;
+
+    LightingGrid[id] = float4(accumulatedLight, albedo.a);
+}
+
+[numthreads(8, 8, 8)]
+void ClearLighting(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= (uint3) GridResolution))
+        return;
+    LightingGrid[id] = float4(0, 0, 0, 0);
+}
