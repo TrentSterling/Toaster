@@ -35,6 +35,14 @@ namespace Toaster
         [Tooltip("After bake, automatically find all Toaster visualizer materials and point cloud renderers in the scene and wire them to the baked grid.")]
         public bool autoWireVisualizers = true;
 
+        [Header("LOD")]
+        [Tooltip("Generate mipmaps on the voxel grid for distance-based LOD sampling.")]
+        public bool generateMipmaps = true;
+
+        [Header("Incremental")]
+        [Tooltip("Only re-voxelize objects that moved since last bake. Faster for iterative edits.")]
+        public bool incrementalBake = false;
+
         [Header("Debug")]
         [Tooltip("Draw yellow wireframe of the bake volume in the Scene view.")]
         public bool drawGizmos = true;
@@ -57,6 +65,17 @@ namespace Toaster
         private ComputeBuffer uvBuffer;
         private ComputeBuffer indexBuffer;
         private ComputeBuffer accumBuffer;
+
+        // Incremental bake — stores hash of each renderer's transform for dirty tracking
+        private System.Collections.Generic.Dictionary<int, int> rendererHashes
+            = new System.Collections.Generic.Dictionary<int, int>();
+
+        static int HashRenderer(MeshRenderer rend)
+        {
+            // Hash position + rotation + scale to detect movement
+            var t = rend.transform;
+            return t.position.GetHashCode() ^ t.rotation.GetHashCode() ^ t.lossyScale.GetHashCode();
+        }
 
         private void OnDestroy()
         {
@@ -97,6 +116,8 @@ namespace Toaster
             voxelGrid.enableRandomWrite = true;
             voxelGrid.filterMode = FilterMode.Bilinear;
             voxelGrid.wrapMode = TextureWrapMode.Clamp;
+            voxelGrid.useMipMap = generateMipmaps;
+            voxelGrid.autoGenerateMips = false; // Generate after bake, not per-write
             voxelGrid.Create();
 
             // 2. Clear the grid
@@ -158,6 +179,16 @@ namespace Toaster
                         continue;
                 }
 #endif
+
+                // Incremental: skip objects that haven't moved since last bake
+                if (incrementalBake)
+                {
+                    int instanceId = rend.GetInstanceID();
+                    int currentHash = HashRenderer(rend);
+                    if (rendererHashes.TryGetValue(instanceId, out int lastHash) && lastHash == currentHash)
+                        continue;
+                    rendererHashes[instanceId] = currentHash;
+                }
 
                 Mesh mesh = mf.sharedMesh;
 
@@ -247,6 +278,10 @@ namespace Toaster
 
             // Release accumulation buffer
             if (accumBuffer != null) { accumBuffer.Release(); accumBuffer = null; }
+
+            // Generate mipmaps for LOD
+            if (generateMipmaps)
+                voxelGrid.GenerateMips();
 
             Appliance.Log($"Bake complete! {objectCount} objects, {triangleCount} triangles.");
 
