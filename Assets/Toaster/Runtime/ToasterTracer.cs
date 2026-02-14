@@ -124,10 +124,32 @@ namespace Toaster
             tracerCompute.SetBuffer(traceKernel, "LightColors", lightColorBuffer);
 
 #if UNITY_EDITOR
-            EditorUtility.DisplayProgressBar("Toaster Trace", "Dispatching path tracer...", 0.5f);
+            EditorUtility.DisplayProgressBar("Toaster Trace", "Dispatching path tracer...", 0.3f);
 #endif
-            // Dispatch — 4x4x4 threads per group
+            // Dispatch surface trace — 4x4x4 threads per group
             tracerCompute.Dispatch(traceKernel,
+                Mathf.CeilToInt(resX / 4f),
+                Mathf.CeilToInt(resY / 4f),
+                Mathf.CeilToInt(resZ / 4f));
+
+#if UNITY_EDITOR
+            EditorUtility.DisplayProgressBar("Toaster Trace", "Dispatching volumetric trace (air voxels)...", 0.6f);
+#endif
+            // Dispatch volumetric trace for fog — overwrites LightingGrid with
+            // air-voxel lighting (direct light + DDA shadows).
+            // Solid voxels become (0,0,0,1), air voxels get traced light color.
+            int volKernel = tracerCompute.FindKernel("TraceVolumetric");
+            tracerCompute.SetTexture(volKernel, "AlbedoGrid", albedoGrid);
+            tracerCompute.SetTexture(volKernel, "LightingGrid", lightingGrid);
+            tracerCompute.SetVector("WorldBoundsMin", worldMin);
+            tracerCompute.SetVector("WorldBoundsMax", worldMax);
+            tracerCompute.SetFloat("VoxelSize", baker.voxelSize);
+            tracerCompute.SetInt("GridResX", resX);
+            tracerCompute.SetInt("GridResY", resY);
+            tracerCompute.SetInt("GridResZ", resZ);
+            tracerCompute.SetBuffer(volKernel, "LightPositions", lightPosBuffer);
+            tracerCompute.SetBuffer(volKernel, "LightColors", lightColorBuffer);
+            tracerCompute.Dispatch(volKernel,
                 Mathf.CeilToInt(resX / 4f),
                 Mathf.CeilToInt(resY / 4f),
                 Mathf.CeilToInt(resZ / 4f));

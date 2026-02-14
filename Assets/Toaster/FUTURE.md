@@ -342,7 +342,42 @@ Cone tracing could let Toaster provide real-time indirect lighting. If the `Ligh
 
 ---
 
-## 15. Moonshot / Far Future
+## 15. Volumetric Light Tracing for Fog (v1.3 Architecture)
+
+**What it is:**
+Baking volumetric lighting data specifically for **air voxels** (empty space), as opposed to surface lighting on geometry. Direct lighting is evaluated at each air voxel with DDA shadow rays through the baked occupancy grid. Solid voxels are zeroed out. The result is a LightingGrid that correctly represents "light present in space" — bright near light sources, dark behind walls.
+
+**Why it matters for Toaster:**
+Before v1.3, Toaster's LightingGrid stored surface lighting (light hitting geometry), which was repurposed for fog. This caused glowing wall edges (bright surface data sampled by fog) and required wall-extinction hacks (smoothstep thresholds, 20x extinction multipliers) that never fully worked. The root cause was a data semantics mismatch: surface lighting != volumetric lighting.
+
+**Key architectural insight — SLZ Custom-URP:**
+Stress Level Zero's volumetric pipeline bakes shadow rays during their offline pass. Their baked 3D texture stores light *present in the volume of space*, not at surfaces. Walls are naturally dark because shadow rays are blocked. No runtime wall detection needed.
+
+**Key architectural insight — Frostbite:**
+In Frostbite's froxel fog, geometry occlusion happens at the **apply pass via the depth buffer**, not in the froxel grid itself. The grid is view-independent and stores fog color + extinction. The depth buffer clips fog at geometry boundaries during compositing.
+
+**Toaster's implementation (v1.3):**
+- `TraceVolumetric` kernel in ToasterTracer.compute: dispatches over ALL voxels (not just solid ones)
+- Air voxels (alpha < 0.01): evaluate `SampleDirectLight()` which does per-light DDA shadow rays via `MarchRay()` — writes `float4(tracedLight, 0.0)`
+- Solid voxels (alpha >= 0.01): write `float4(0, 0, 0, 1.0)` — black for fog, alpha=1 marks walls
+- Runs AFTER `TraceLight` (which handles surface visualization), overwriting LightingGrid
+- InjectMedia simplified: binary `step(0.5, alpha)` wall cutoff, no smoothstep/wallExtinction hacks
+- Depth buffer in apply pass handles geometry clipping (Frostbite method)
+
+**Why DDA shadow rays are correct for this:**
+- DDA steps exactly one voxel at a time — no thin-wall skipping
+- Shadow ray from air voxel to light: if it hits any solid voxel (alpha > 0.01), the air voxel is in shadow
+- This produces correct penumbra naturally — voxels at wall edges see partial light coverage
+- No bounces needed for fog — just direct light + shadows (ambient handles fill)
+
+**References:**
+- [Stress Level Zero Custom-URP](https://github.com/StressLevelZero/Custom-URP) — volumetric bake with shadow rays
+- Hillaire, S. — "Physically-based & Unified Volumetric Rendering in Frostbite" (SIGGRAPH 2015) — depth buffer geometry occlusion
+- Wronski, B. — "Volumetric Fog" (SIGGRAPH 2014) — froxel grid data semantics
+
+---
+
+## 16. Moonshot / Far Future
 
 ### Neural Radiance Fields (NeRF-style) for Baked Lighting
 Train a tiny MLP to represent the lighting field instead of storing a 3D texture. Could compress lighting data 100x. Reference: Mueller et al., instant-ngp (NVIDIA, 2022).

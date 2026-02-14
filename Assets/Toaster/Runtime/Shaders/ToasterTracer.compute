@@ -1,5 +1,6 @@
 #pragma kernel TraceLight
 #pragma kernel ClearLighting
+#pragma kernel TraceVolumetric
 
 // --- Textures ---
 Texture3D<float4> AlbedoGrid;       // Baked voxel colors (from VoxelBaker)
@@ -288,4 +289,31 @@ void ClearLighting(uint3 id : SV_DispatchThreadID)
     if (any(id >= (uint3) GridResolution))
         return;
     LightingGrid[id] = float4(0, 0, 0, 0);
+}
+
+// ============================================================
+// Volumetric trace kernel — traces direct lighting for AIR voxels
+// Used by froxel fog pipeline. Solid voxels = black (walls don't scatter).
+// Air voxels = direct light with DDA shadow rays (correct occlusion).
+// ============================================================
+
+[numthreads(4, 4, 4)]
+void TraceVolumetric(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= (uint3) GridResolution))
+        return;
+
+    float4 albedo = AlbedoGrid[id];
+    float3 worldPos = WorldBoundsMin + ((float3)id + 0.5) * VoxelSize;
+
+    if (albedo.a >= 0.01)
+    {
+        // SOLID VOXEL — zero light for fog (walls don't scatter into air)
+        LightingGrid[id] = float4(0, 0, 0, 1.0);
+        return;
+    }
+
+    // AIR VOXEL — evaluate direct lighting with DDA shadow rays
+    float3 directLight = SampleDirectLight(worldPos);
+    LightingGrid[id] = float4(directLight, 0.0);
 }

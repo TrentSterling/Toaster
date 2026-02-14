@@ -15,21 +15,21 @@ MonoBehaviour:
   m_Active: 1
   settings:
     froxelResolution: {x: 160, y: 90, z: 128}
-    maxDistance: 100
+    maxDistance: 99.23517
     nearPlane: 0.3
     depthUniformity: 0.5
-    fogDensity: 0.001
-    fogIntensity: 0
-    scatteringAlbedo: 3.1
-    ambientColor: {r: 0.08, g: 0.08, b: 0.12, a: 1}
+    fogDensity: 0.02
+    fogIntensity: 2
+    scatteringAlbedo: 2
+    ambientColor: {r: 0.02, g: 0.015, b: 0.03, a: 1}
     maxLights: 16
     scatterAnisotropy: 0.3
-    lightDensityBoost: 1.5
+    lightDensityBoost: 0
     enableHeightFog: 0
     heightFogBase: 0
     heightFogTop: 20
     enableTemporal: 1
-    temporalBlendAlpha: 0.57
+    temporalBlendAlpha: 0.2
     debugMode: 0
   froxelCompute: {fileID: 7200000, guid: 4b2d39f172c730047ae97da7ac0e50cc, type: 3}
   applyShader: {fileID: 4800000, guid: 2e35cfa6a31a0f6489ba79711e6cd34b, type: 3}
